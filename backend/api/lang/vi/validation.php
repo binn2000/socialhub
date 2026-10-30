@@ -1,0 +1,62 @@
+<?php
+
+// Vietnamese validation messages. A rule that is missing here falls back to the
+// English text of Laravel (fallback_locale).
+return [
+    'required' => ':attribute là bắt buộc.',
+    'string' => ':attribute phải là chuỗi ký tự.',
+    'email' => ':attribute phải là địa chỉ email hợp lệ.',
+    'unique' => ':attribute đã được sử dụng.',
+    'regex' => ':attribute không đúng định dạng.',
+    'confirmed' => 'Xác nhận :attribute không khớp.',
+    'integer' => ':attribute phải là số nguyên.',
+    'boolean' => ':attribute phải là đúng hoặc sai.',
+    'array' => ':attribute phải là danh sách.',
+    'in' => ':attribute không hợp lệ.',
+    'uuid' => ':attribute phải là UUID hợp lệ.',
+    'file' => ':attribute phải là một tệp.',
+    'image' => ':attribute phải là ảnh.',
+    'mimes' => ':attribute phải có định dạng: :values.',
+    'exists' => ':attribute không tồn tại.',
+    'date' => ':attribute không phải ngày hợp lệ.',
+    'min' => [
+        'string' => ':attribute phải có ít nhất :min ký tự.',
+        'numeric' => ':attribute phải từ :min trở lên.',
+        'array' => ':attribute phải có ít nhất :min mục.',
+        'file' => ':attribute phải từ :min KB trở lên.',
+    ],
+    'max' => [
+        'string' => ':attribute không được quá :max ký tự.',
+        'numeric' => ':attribute không được lớn hơn :max.',
+        'array' => ':attribute không được quá :max mục.',
+        'file' => ':attribute không được lớn hơn :max KB.',
+    ],
+    'between' => [
+        'numeric' => ':attribute phải trong khoảng :min đến :max.',
+        'string' => ':attribute phải có từ :min đến :max ký tự.',
+    ],
+    'uploaded' => 'Tải :attribute lên không thành công.',
+
+    'attributes' => [
+        'name' => 'Tên',
+        'username' => 'Tên người dùng',
+        'email' => 'Email',
+        'password' => 'Mật khẩu',
+        'code' => 'Mã',
+        'deviceName' => 'Tên thiết bị',
+        'content' => 'Nội dung',
+        'text' => 'Nội dung',
+        'bio' => 'Tiểu sử',
+        'image' => 'Ảnh',
+        'avatar' => 'Ảnh đại diện',
+        'userId' => 'Người dùng',
+        'privacy' => 'Quyền riêng tư',
+        'feeling' => 'Cảm xúc',
+        'target' => 'Nơi chia sẻ',
+        'limit' => 'Số lượng',
+        'cursor' => 'Con trỏ trang',
+        'q' => 'Từ khóa',
+        'token' => 'Mã thiết bị',
+        'platform' => 'Nền tảng',
+    ],
+];

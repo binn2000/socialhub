@@ -1,0 +1,4 @@
+# Runs the scheduled housekeeping (expired stories, idempotency keys, expired tokens,
+# old failed jobs). One line, every minute; Laravel decides what is due.
+# Install with: crontab -u www-data crontab.txt
+* * * * * cd /var/www/socialhub/backend/api && php artisan schedule:run >> /dev/null 2>&1

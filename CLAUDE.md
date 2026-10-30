@@ -1,0 +1,181 @@
+# CLAUDE.md
+
+Guidance for AI assistants and developers working in this repository. Everything here was checked against the source; items marked **Proposed** are recommendations, not current conventions.
+
+## 1. Project overview
+
+**SocialHub** is a Flutter social-network UI MVP (Vietnamese UI). It is a **learning project**: frontend only, mock data, no backend, no auth, no persistence. Keeping the code simple and beginner-readable is a core requirement (see `.github/copilot-instructions.md` §3, §27).
+
+- Stack: Flutter (Material 3) / Dart `^3.11.1`. Dependencies: `flutter`, `dio` (HTTP), `flutter_secure_storage` (token), `image_picker` (avatar photo), `firebase_core` + `firebase_messaging` (push); dev: `flutter_test`, `flutter_lints`. `pubspec.lock` is checked in.
+- Platforms present: `android/`, `ios/` (design target: iPhone 17 Pro).
+- Architecture: **one `StatefulWidget` (`MainScreen` in `lib/main.dart`) owns all mutable app state via `setState`.** Screens are given data and callbacks through constructors. `lib/data/mock_data.dart` is the *initial seed only*.
+- **Backend (started):** `backend/api` is a Laravel 13 project (run it with PHP 8.5: `/opt/homebrew/opt/php@8.5/bin/php`; the default `php` is 7.4) connected to the `socialhub` database in Homebrew MariaDB 10.11 on port 3307 (started with `backend/run-mariadb.sh`; its data is in `/opt/homebrew/var/mariadb-socialhub`, admin = the OS user through the socket `/tmp/socialhub-mariadb.sock`; XAMPP's MariaDB 10.1.38 on 3306 still holds the old copy and the user's other projects, so leave it alone), with Sanctum installed and the `User` model on ULIDs. The tables come from `backend/api/database/schema.sql`. Implemented endpoints: `POST /auth/register`, `/auth/login`, `/auth/logout`, `GET/PATCH /me`, `POST/DELETE /me/avatar`, `GET /me/saved-posts`, `GET/POST /stories`, `DELETE /stories/{id}`, `POST /stories/{id}/view`, `GET/POST /conversations`, `GET/POST /conversations/{id}/messages`, `POST /conversations/{id}/read`, `GET /notifications`, `GET /notifications/unread-count`, `POST /notifications/read`, `POST /notifications/{id}/read`, `POST /auth/email/verification`, `POST /auth/email/verify`, `POST /auth/password/forgot`, `POST /auth/password/reset`, `DELETE /me` (account deletion), `POST/DELETE /me/cover`, `GET /users/suggestions`, `GET /users/{user}/friends`, `GET /users/{user}/photos`, `PUT/DELETE /users/{user}/block`, `GET /me/blocks`, `POST /reports`, `PATCH /posts/{post}` (privacy only), `GET /explore`, `POST /posts/{post}/shares`, `GET/POST /posts/{post}/comments`, `DELETE /comments/{comment}`, `GET /users`, `GET /users/{user}`, `GET /users/{user}/posts`, `GET/POST /friend-requests`, `POST /friend-requests/{id}/accept`, `DELETE /friend-requests/{id}`, `DELETE /friends/{user}`, `GET /feed`, `POST /posts`, `GET/DELETE /posts/{post}`, `PUT/DELETE /posts/{post}/like|save|hide` (images upload as multipart to `POST /posts`, `POST /stories`, `POST /me/avatar` and are re-encoded onto the `public` disk, which needs `artisan storage:link`; PHP's default `upload_max_filesize` of 2M must be raised to 10M to match the contract; `Idempotency-Key` is honoured on the four create POSTs (posts, comments, stories, messages); tests: `cd backend/api && /opt/homebrew/opt/php@8.5/bin/php artisan test`, uses the `socialhub_test` database). The Flutter app still uses mock data only. The single source of truth for the future API is **`docs/api/openapi.yaml`** (see section 7). Do not describe the backend as existing.
+- Tabs (`AppTab` enum in `lib/widgets/bottom_nav.dart`): Home, Explore, Friends, Create Post, Notifications, Profile. Messages/Chat, Edit Profile and the story screens are pushed routes, not tabs.
+
+## 2. Repository structure
+
+```
+lib/main.dart            SocialHubApp (themes, dark-mode flag, sign-in gate) + MainScreen (all app state, tab switching)
+lib/services/            SocialApi (interface), MockSocialApi (offline seed), HttpSocialApi (dio, Laravel API),
+                         api_mappers.dart (JSON -> models), token_store.dart, photo_picker.dart
+lib/data/mock_data.dart  Seed data: currentUser, mockUsers/Posts/Stories/Notifications/Conversations
+lib/models/              Immutable data classes (post, user, story, message, notification)
+lib/screens/             One screen per file (home, explore, friends, create_post, notifications,
+                         profile, edit_profile, messages, chat, story_viewer, story_creator)
+lib/widgets/             bottom_nav.dart (SocialBottomNav + AppTab), mock_image.dart (PostMedia,
+                         MockImagePreview, canLoadAssetImage), story_item.dart, user_avatar.dart
+lib/utils/post_search.dart  searchPosts(): matching rule shared by Home and Explore
+test/                    One file per feature + test_helpers.dart
+assets/placeholder.png   1x1 pixel file (see gotchas)
+docs/api/openapi.yaml    Draft API contract (OpenAPI 3.1) + proposed MariaDB 10.1 schema (`x-database`) for the approved Laravel backend
+.github/copilot-instructions.md  Older project spec (partly outdated, see gotchas)
+```
+
+## 3. Development commands (verified)
+
+```sh
+flutter pub get                         # install dependencies
+flutter analyze                         # static analysis (flutter_lints); must report no issues
+flutter test                            # full suite (~147 tests, ~15 s)
+flutter test test/explore_test.dart     # one file
+flutter test --plain-name 'text'        # tests whose name contains "text"
+dart format .                           # format
+```
+
+`flutter run` is documented in the README but was not run while writing this file. No build, lint-config or CI commands exist beyond the above (no CI config, no scripts).
+
+## 4. Architecture rules (current practice)
+
+- **State lives in `MainScreen`.** Screens never import `mock_data.dart` for runtime data (only `MockSocialApi` does); they receive lists/objects as constructor parameters and report changes through callbacks (`onToggleLike`, `onPostCreated`, ...). Only `main.dart` imports the mock data.
+- **Screens keep only UI state** (search text, selected filter, open/closed search, friend-request statuses). Search/filter results are **derived in `build`** from the input lists, never stored as a second list.
+- **Hide/save are ID sets** (`_hiddenPostIds`, `_savedPostIds`) in `MainScreen`; `Post` is not modified for them. `_posts` is the single source of posts. Home receives `_posts` **minus hidden IDs**; Explore and Profile receive all of `_posts` (intentional).
+- Models are immutable; change them with `copyWith` (`Post`, `UserModel`) or by rebuilding the object. Do not mutate model objects or the `mock*` lists.
+- Shared behavior lives in one place: search matching in `lib/utils/post_search.dart`, the placeholder-asset rule in `canLoadAssetImage()`, post image rendering in `PostMedia`. Reuse them instead of copying.
+- Navigation: plain `Navigator.push` and the `AppTab` enum. Use `AppTab.x.index`, not bare tab numbers.
+
+## 5. Coding conventions (observed)
+
+- Files `snake_case.dart`; classes `UpperCamelCase`; private members `_prefix`. One screen per file, named `*_screen.dart`.
+- Callback parameters are named `onSomething`; `MainScreen` handlers are `_handleSomething` (use `ValueChanged<String>` for typed callbacks).
+- `const` constructors/widgets wherever possible; `package:flutter_learning/...` imports; `dart format` output is the formatting standard.
+- Comments explain **why**, not what. Do not add comments that restate the code.
+- Colors: use `Theme.of(context).colorScheme` (Material 3). Explicit `Color(...)`/`Colors.*` are intentional only for brand gradients, accent icons, and the black full-screen story screens. Use `onPrimary` / `onSurface` for text on `primary` / surfaces (not `Colors.white`).
+- UI text is Vietnamese. Error handling is minimal by design (no I/O). No logging framework and no `print`.
+
+## 6. State management
+
+- **Do not add** Provider, Riverpod, Bloc, GetX, Redux, MobX, etc. unless the user explicitly asks; explain first why `setState` is no longer enough.
+- Global (app-session) state: `MainScreen`. Local UI state: the screen's own `State`. There is no server state or cache.
+- `IndexedStack` keeps all six tab screens alive, so their local state persists across tab switches (and `MainScreen.build` rebuilds every tab on each `setState`).
+- `_conversations` is updated **in place** on purpose: an open `ChatScreen` reads that same list after sending.
+
+## 7. API / data layer, 8. Database
+
+**Flutter side today:** `lib/services/` holds `SocialApi`. `MockSocialApi` (the default, offline, no sign-in) feeds `MainScreen` synchronously from the seed data, so every pre-existing test runs unchanged. `HttpSocialApi` talks to the Laravel API and is selected by `--dart-define=API_BASE_URL=http://localhost:8000/api/v1` (Android emulator: `http://10.0.2.2:8000/api/v1`; start the server with `php artisan serve` from `backend/api` using PHP 8.5). With a server the app shows `AuthScreen` first, the token is kept in `flutter_secure_storage`, and `MainScreen` loads feed/explore/stories/users/conversations/notifications once, then re-loads when a tab is tapped more than 15 s after the last load. Changes (like, save, hide, post, story, message, profile) are applied locally at once and rolled back with a SnackBar if the server refuses; a 401 returns to sign-in. `SocialApi.isRemote` switches the few UI differences (logout button, avatar picker, real friend requests).
+
+**Photos:** with a server, Create Post, Story and Edit Profile pick real photos with `image_picker` (`MainScreen._pickPhoto`, injectable through `SocialHubApp(pickPhoto:)` for tests). The picked file path travels in `Post.imageUrl` / `Story.imageUrl`; `HttpSocialApi` uploads it as multipart when it is a local file path (not `http…` or `assets/…`), and the stored server version replaces the local draft. The mock app keeps its mock image picker.
+
+**Social screens (server only):** `PostInteractions` (passed to `HomeScreen`) turns the post card's comment button into `CommentsSheet` (list, add, delete for the comment's author and the post's author), records shares (`Sao chép liên kết` copies `socialhub://posts/{id}` to the clipboard) and makes author names/photos open `UserProfileScreen`. `FriendsScreen` lists incoming requests (`Chấp nhận` / `Từ chối`) above the users, and tapping a user opens their profile, where the buttons follow the `Friendship` state (Thêm bạn / Hủy lời mời / Chấp nhận + Từ chối / Bạn bè → Hủy kết bạn). `MainScreen._openProfile` wires the profile actions to the app state; all of this is off on the mock app (`interactions` and the callbacks are null), which keeps its session-only comment box and share sheet.
+
+**Starting a chat (server only):** `SocialApi.startConversation(friend)` (`POST /conversations`, friends only) backs the "Tin nhắn mới" button on Messages (friend picker) and the "Nhắn tin" button on a friend's profile; `MainScreen._startConversation` reuses an existing conversation from `_conversations` or inserts the new one, then opens the chat.
+
+**Also server-only:** the Home post menu has "Xóa bài viết" for your own posts (confirm dialog, optimistic removal, rolled back on failure; its notifications disappear with it). Tapping a notification opens `PostDetailScreen` (like, comments, delete if yours) for like/comment/share, or the actor's profile for friend notifications (where a request can be answered). `StoryViewerScreen.onViewed` reports each story shown (after the first frame, once per story) and `MainScreen._handleStoryViewed` sends `POST /stories/{id}/view` for other people's unseen stories; a seen story gets a grey ring.
+
+**Polling and refresh (server only):** with an open chat `MainScreen` asks `loadNewMessages(id, afterMessageId:)` every 4 s (`GET .../messages?after=`), appends only unseen ids, marks the conversation read when the other person wrote, and waits while one of our own messages is still being sent (otherwise the poll could return it before the send's answer replaces the local copy). While the Messages screen is open it re-reads `loadConversations()` every 15 s and keeps the messages already loaded; an open conversation never gets an unread badge. Both timers stop when their screen closes. `ChatScreen` and `MessagesScreen` take a `refresh` Listenable (`MainScreen._chatChanges`) because they are separate routes that the app's `setState` does not rebuild; the chat also scrolls to the newest message. Home, Explore, Friends and Notifications support pull-to-refresh (`onRefresh` → `MainScreen._refreshAll`, a full `load()`, errors shown in a SnackBar); on the mock app all of these callbacks are null.
+
+**Explore (server only):** the details sheet of an Explore post gets the same social actions as Home (comments via `CommentsSheet`, the shared `showShareSheet`, save/unsave with a bookmark on the tile, and the author opens the profile). The sheet is a separate route, so `ExploreScreen` bumps a `_postsVersion` notifier after each frame in which MainScreen gave it new posts, and the sheet re-reads the post and saved state from it; do not bump it inside `didUpdateWidget` directly (it marks the sheet dirty while building).
+
+**Saved posts:** `GET /me/saved-posts` (added to `docs/api/openapi.yaml` first) lists what the user saved, newest save first, skipping posts that were deleted or are no longer visible. The Profile tab has "Bài đã lưu" next to "Edit Profile" (same row, so the posts below do not move) opening `SavedPostsScreen` (pull to refresh, unsave removes the card). Unsaving goes through `MainScreen._setSaved(id, false)` and never a toggle, because a saved post that is not on Home is not in `_savedPostIds` and a toggle would save it. The mock app lists the posts saved in the current session from `_savedPostIds` (newest first).
+
+**Backend operations:** notifications (`App\Jobs\CreateNotification`) and image-file removal (`App\Jobs\DeleteStoredImage`) run on the database queue, dispatched `afterCommit`, so a worker must be running or notifications never appear (tests use the sync queue). `backend/run-dev.sh` starts the API (4 server workers), the queue worker and the scheduler together, with the PHP upload limits and the right PHP binary; stop it with Ctrl+C. Production samples (not applied anywhere): `backend/api/.env.production.example`, `backend/deploy/` (supervisor queue worker, cron line, nginx site). Uploaded images go to the disk named by `IMAGES_DISK` (`public` locally, `s3` in production, needs `AWS_*`; files must be publicly readable by URL). Production errors never leak details: `bootstrap/app.php` maps every API exception to `{message, code}` and a non-debug 500 to `server_error`; `TRUSTED_PROXIES` makes Laravel trust the load balancer's forwarded headers. The app connects as the MariaDB user `socialhub_app` (created by `backend/api/database/create-db-user.sh`; `--dml-only` makes a runtime-only account for production), not root; its password is only in `backend/api/.env`. The scheduler also prunes expired Sanctum tokens and old failed jobs daily. Laravel Boost (`composer require --dev laravel/boost`, `.mcp.json`, `.claude/skills`, `boost.json`, `backend/api/CLAUDE.md`) was installed because `backend/api/CLAUDE.md` asked for it.
+
+**Account security (server only):** registration queues a 6-digit email code (`App\Support\AuthCodes`, table `auth_codes`, HMAC-hashed, 15 min, 5 tries, one per user+purpose, mail via queued Mailables, so `MAIL_MAILER=log` in development writes the code to `storage/logs`; production needs real SMTP). Verification blocks nothing; `Me.emailVerified` drives the Profile banner "Email chưa được xác thực" (`VerifyEmailScreen`). "Quên mật khẩu?" on `AuthScreen` opens `ForgotPasswordScreen` (email, then code + new password); the forgot endpoint answers 202 for unknown emails too, and a reset revokes every token. "Xóa tài khoản" in Edit Profile asks for the password (`showDeleteAccountDialog`), soft-deletes the user (tokens and friendships removed, posts/comments/chats disappear for others), keeps the email/username reserved, and `accounts:purge-deleted` (daily, 30 days) removes the rows and queues image deletion. `php artisan images:check-disk` writes, fetches by URL and deletes a test file on `IMAGES_DISK`: run it once against a real S3 bucket (never done yet, only `Storage::fake` is tested). The `friendships.user_low_id/user_high_id` columns are plain app-filled columns (MariaDB 10.2+ rejects the old generated ones); Homebrew MariaDB 10.11 passes the whole suite.
+
+**Push, paging, search, Vietnamese (server only):** `PUT/DELETE /me/devices` store FCM tokens (`device_tokens`); `CreateNotification` dispatches `SendPush`, and `App\Support\PushSender` sends through FCM HTTP v1 when `FCM_PROJECT_ID` and `FCM_CREDENTIALS` (service-account JSON path) are set, otherwise it only logs. In the app `PushService` (`lib/services/push_service.dart`) is the only code that touches `firebase_core`/`firebase_messaging` (approved for push); `FirebasePushService` is used only with `API_BASE_URL`, returns null from `start()` when Firebase is not configured, and the app then works without push. **To get real pushes:** create a Firebase project, put `google-services.json` in `android/app/` (the `com.google.gms.google-services` Gradle plugin is already declared and applied automatically once that file exists) and `GoogleService-Info.plist` in `ios/Runner/` (plus an APNs key in Firebase); neither file exists yet, so push has only been tested with fakes. Opening Home/Explore/Notifications/Friends near the end of a list loads the next cursor page (`MainScreen._loadMore`, `LoadMoreListener`); Friends searches on the server (`GET /users?q=`, debounced). Server messages are Vietnamese (`APP_LOCALE=vi`, `lang/vi.json`, `lang/vi/validation.php`); the app shows them as they come.
+
+**Reporting, blocking, post privacy (server only):** `POST /reports` stores a report (post, comment or user; reasons in `report_sheet.dart`, same list as the API) in `reports`; there is no admin screen or endpoint, so operators read the table (`select * from reports where status = 'open'`). A block (`user_blocks`, `App\Support\Blocks`) deletes any friendship between the two and hides each from the other: posts (`Post::visibleTo/feedFor`, Explore), comments, notifications (also no new ones), user lists, conversations, friend requests; the blocked person gets 404 for the blocker's profile, the blocker still opens it (`isBlocked`) to unblock; the list is under Edit Profile → "Người đã chặn". In the app `PostInteractions.report/blockUser/changePrivacy` add "Báo cáo bài viết", "Chặn <tên>" (others' posts) and "Đổi quyền riêng tư" (own posts, `PATCH /posts/{id}`) to the Home post menu, a flag button on others' comments and a menu on `UserProfileScreen`; all are null on the mock app. Explore's details sheet and `PostDetailScreen` use the same actions through `PostModerationMenu` (`lib/widgets/post_moderation.dart`, which Home's menu also calls); in Explore a post that stops being public closes the sheet, because Explore lists public posts only.
+
+**Profile and list support added for the UI redesign (backend only so far; the Flutter app does not use it yet):** `Me` and `UserProfile` carry `coverUrl`, `about` (`location`, `hometown`, `workplace`, `education`, `website`, `birthday`) and, on profiles, `createdAt`; `PATCH /me` edits the about fields and `POST/DELETE /me/cover` the cover (columns in migration `add_profile_fields_to_users_table`). `GET /users/{id}/friends` and `/photos` back the profile tabs, `GET /users/suggestions` is "people you may know" (mutual friends first, offset cursor), `GET /conversations?q=` searches by the other person's name/username, `GET /notifications?category=interactions|friends&unread=true` filters, `GET /feed?filter=all|friends|popular` gives the feed tabs. Not supported by the backend: video.
+
+**Multiple images, chat attachments, follow, presence, typing (backend only so far; the Flutter app does not use them yet):** `POST /posts` takes `images[]` (up to 10; `image` still works) stored in `post_images`, and posts return `imageUrls` (`imageUrl` stays the first one); `GET /users/{id}/photos` lists one item per image. `POST /conversations/{id}/messages` takes `attachments[]` (up to 5, 10 MB each: jpg/png/webp re-encoded, or pdf/doc(x)/xls(x)/ppt(x)/txt/csv/zip stored as is under a random name in `chat/`); messages carry `attachments` and `text` may be empty. `PUT/DELETE /users/{id}/follow` is one-way follow (`follows`): followed people's public posts join the feed, `GET /feed?filter=following`, `GET /users/{id}/followers|following`, profiles carry `followersCount`, `followingCount`, `isFollowing`, `followsYou`, and a `follow` notification exists (the Flutter mapper shows it as "đã bắt đầu theo dõi bạn"). Presence: `App\Http\Middleware\TouchLastSeen` writes `users.last_seen_at` at most once a minute; friends see `isOnline` (active in the last 2 minutes) and `lastSeenAt` on profiles, user lists and conversation participants unless the user turned `showOnlineStatus` off (then they look offline); `POST /me/presence` is a heartbeat. Typing: `PUT/DELETE /conversations/{id}/typing` keeps a 6-second flag in the cache and `GET .../messages` returns `meta.otherTyping`.
+
+**Known gaps with a server:** a message can take up to 4 s to show while the app is open (polling); email verification is not enforced (only a banner).
+
+**Approved target (not built):** Laravel API-only, **MariaDB 10.1.38** (the version bundled with the project's local XAMPP install — not MySQL; see below), Sanctum bearer tokens, `/api/v1`, JSON, cursor pagination, Laravel Storage (local in development, S3-compatible in production), polling chat, database queue driver. The contract is `docs/api/openapi.yaml`:
+
+- It is a **draft**. Change the contract first, then the code, and keep Flutter models and Laravel resources in step with it (JSON is camelCase; IDs are ULID strings; timestamps are UTC ISO 8601; enums are identifiers such as `only_me`, never Vietnamese labels).
+- Flutter packages `dio`, `flutter_secure_storage`, `image_picker` and (for push only) `firebase_core`/`firebase_messaging` are added and used. No other new dependency.
+- The mock implementation stays behind the same `SocialApi` interface so the tests run without a server. Keep `setState`; Bloc/Riverpod are not approved. Flutter models still differ from the contract (Vietnamese labels, relative-time strings); `api_mappers.dart` is the only place that translates.
+- **MariaDB 10.1.38 is old (EOL October 2020) and the schema in `docs/api/openapi.yaml`'s `x-database` section is adjusted around three of its limitations, explained there: unique indexes on long `utf8mb4` columns need `ROW_FORMAT=DYNAMIC` plus `innodb_large_prefix`/`innodb_file_format=Barracuda` server settings; `CHECK` constraints are parsed but not enforced, so the same rule must also live in Laravel validation; there is no native `JSON` column type, so `idempotency_keys.response_body` is `text` with manual encode/decode. Do not silently assume MySQL-8 behavior (e.g. `utf8mb4_0900_ai_ci`, enforced `CHECK`, real `JSON`) when writing migrations — check the contract's notes first.
+
+## 9. Testing rules
+
+- Framework: `flutter_test` only; no mocking libraries. Tests run the real app (`pumpSocialHub`) or a single screen wrapped in `MaterialApp`.
+- One file per feature in `test/` (`*_test.dart`). Shared helpers live in `test/test_helpers.dart` (`pumpSocialHub`, `tapTab`, `openPostMenu`, `visibleVerticalScrollable`, ...).
+- Test user-visible behavior (text, semantics, tapping), not private members. Tests contain Vietnamese UI strings and depend on seed data (`mockPosts` order, like counts) - changing either requires updating tests.
+- Add or update tests when changing behavior, and keep `flutter analyze` + `flutter test` green.
+- Test-writing gotchas: the default test screen is 800x600 (use `tester.ensureVisible` / `scrollUntilVisible`, or set `tester.view.physicalSize`); `Icons.person_rounded` is both the Profile tab and the avatar fallback icon, so tap tabs via `tapTab` (scoped to `NavigationBar`); use `isSemantics(...)` (`containsSemantics` is deprecated); a `SnackBar` with an action needs `persist: false` to auto-close.
+
+## 10. Security rules
+
+The app has no network, secrets, or user data handling today. Keep it that way; if that changes, add validation at the boundary and never commit secrets (`android/.gitignore` already ignores `key.properties`, `*.jks`, `*.keystore`). Do not copy Facebook branding, logos, or assets (see `.github/copilot-instructions.md`).
+
+## 11. Git / change rules
+
+- **This directory is not currently a git repository** (no `.git`), so there is no history or diff to fall back on: make small changes and say what changed.
+- No commit/branch/PR convention is defined.
+- Do not hand-edit `pubspec.lock`, `.dart_tool/`, `build/`, or `.metadata`. `.idea/` and `*.iml` are IDE files.
+
+## 12. Important gotchas
+
+- **`assets/placeholder.png` is a 1x1 pixel.** `canLoadAssetImage()` deliberately skips it, so every mock image/avatar renders as a gradient/icon fallback. `Post.imageId` picks the gradient (`mockImageColors`); posts without one use a legacy hash of the post id.
+- **Tabs stay alive** (`IndexedStack`), so a screen's local state survives tab switches. Create Post therefore resets its own form after a successful post (`_resetForm`); keep doing this for any form-like tab, or old input will reappear.
+- **Card colors:** UI reads `Theme.of(context).cardColor`, which in this theme equals `colorScheme.surface`. The `cardTheme` in `main.dart` (`#FFFFFF` / `#1B1F29`) is **not applied** (no `Card` widget is used). Do not "fix" it casually - it changes the look of every screen. In dark mode, cards are nearly the same color as the background.
+- **Ids** for new posts/stories/messages come from `DateTime.now().millisecondsSinceEpoch` (collide if two are created in the same millisecond).
+- **Opening the Notifications tab marks all notifications read**; the per-notification tap handler runs later and cannot be observed as "one read".
+- **Story viewer** has a 4-second auto-advance timer (present in code, untested) and a heart button that does nothing.
+- **Mixed UI language:** most text is Vietnamese, but nav labels, *Friends*, *Messages*, *Edit Profile*, *Just now* are English, and tests assert them. There is no l10n setup or locale on `MaterialApp`, so system-provided text (e.g. back-button tooltip) uses default English.
+- **Seed data:** `mockUsers/Posts/...` are mutable global lists; `MainScreen` copies them once. `MainScreen._users` keeps the original current user (its name is not updated after Edit Profile); Friends excludes the current user by id.
+- **Stale spec:** `.github/copilot-instructions.md` mentions `widgets/post_card.dart` (does not exist), five destinations (there are six), and Profile tabs/cover image (not implemented). Its philosophy is still valid; where it disagrees with the code, the code wins.
+- **Release readiness:** `applicationId`/bundle id are `com.example.*` and the release build type uses the debug signing key (`android/app/build.gradle.kts`). Not release-ready.
+
+## 13. Do not
+
+- Do not introduce a state-management package, routing package, or any dependency other than the approved `dio`, `flutter_secure_storage`, `image_picker`, `firebase_core`, `firebase_messaging` (and only when the task needs them). The only approved backend is the Laravel one described in `docs/api/openapi.yaml`; Firebase is used for push delivery only, never as a backend.
+- Do not implement a Laravel endpoint or Flutter API call that is not in the contract, and do not change the contract silently: update `docs/api/openapi.yaml` in the same change.
+- Do not read `mock*` data from screens/widgets at runtime; do not mutate `_posts`, `mock*` lists, or model objects in place.
+- Do not store search/filter results or hidden/saved flags on `Post`.
+- Do not implement product features while asked to audit/fix; do not rewrite unrelated code or "clean up" outside the task.
+- Do not remove a model field just because it is unused (`username`, `coverUrl`, `accentColor`, `Story.isViewed` are deliberate seed-only fields) without discussing it.
+- Do not change tab order or make Messages a tab; keep `AppTab`, the icon/label lists and the `screens` list in `MainScreen.build` in sync.
+- Do not change visible UI strings or seed data without updating the tests that assert them.
+- Do not hard-code light-only colors (`Colors.white` text on themed backgrounds, etc.).
+
+## 14. Change workflow
+
+1. Read the relevant screens/models and `MainScreen` state before editing; find the existing pattern and reuse shared helpers.
+2. Identify impact (which screens receive this data; do Home/Explore/Profile all need it?).
+3. Make the smallest change that fits the current architecture.
+4. Update or add focused tests; run the affected test file, then the full suite.
+5. Run `dart format .`, `flutter analyze`, `flutter test`; all must be clean.
+6. For UI changes, check light **and** dark mode (a widget test that renders both, or run the app).
+7. Report what changed, what was verified, and any remaining risk. Never claim something works without running it.
+
+## Proposed (not current convention)
+
+- Extract a shared `PostCard` (Home card, Profile card, Explore tile/details duplicate post UI, including the "đang <feeling> · <privacy>" line built in three places).
+- Central color/spacing constants and a decision on `cardTheme` vs `cardColor`.
+- Extract post-list state logic from `MainScreen` (about 420 lines) into a small controller only if it keeps growing.
+- Move UI strings to Flutter localization and set a locale.
+
+## iOS plugins use CocoaPods
+
+`pubspec.yaml` sets `flutter: config: enable-swift-package-manager: false`. With Swift Package Manager on (the default) `flutter build ios` failed with "Module 'flutter_secure_storage_darwin' not found" and a Podfile that kept coming back. Do not remove that setting or run `pod deintegrate` without re-testing `flutter build ios --simulator`.
+
+## Backend gotcha: `artisan serve` ignores env overrides
+
+`php artisan serve` removes any environment variable that also appears in `backend/api/.env` before starting its child server, so `DB_DATABASE=other php artisan serve` still uses the `.env` database. To smoke-test against a throwaway database, change `.env` (or copy it) instead. This once put smoke-test rows into the real `socialhub` database; they were deleted afterwards.
+
+## Android builds need JDK 17-21
+
+Android Studio's bundled JDK is 25 here, which Gradle 8.14 rejects. Flutter is set to JDK 21 with `flutter config --jdk-dir=~/Library/Java/JavaVirtualMachines/jbr-21.0.11/Contents/Home`. `flutter build apk --debug` works (SDK at `/Volumes/Du_Lieu/android_sdk`); a debug APK was built both without and with a placeholder `google-services.json`.

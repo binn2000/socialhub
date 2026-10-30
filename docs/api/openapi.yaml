@@ -1,0 +1,3094 @@
+openapi: 3.1.0
+info:
+  title: SocialHub API
+  version: 1.0.0-draft
+  summary: The single contract shared by the Laravel backend and the Flutter client.
+  description: |
+    **Status: DRAFT. Nothing in this file is implemented yet.** It was derived from the
+    Flutter app as it stands on 2026-09-30 (models in `lib/models/`, seed data in
+    `lib/data/mock_data.dart`, and the screens that use them). Where the real product needs
+    something the Flutter app does not have yet, the endpoint is marked **[NEW]** and the
+    gap is listed in the review notes delivered with this file.
+
+    Approved decisions: Laravel API-only, MariaDB 10.1.38, Sanctum bearer tokens, `/api/v1`, JSON,
+    OpenAPI, Laravel Storage (local in development, S3-compatible in production),
+    polling chat, real comments, real image upload, database queue driver.
+
+    ## General conventions
+
+    | Topic | Rule |
+    |---|---|
+    | Base URL | `/api/v1`. Breaking changes require `/api/v2`. Adding fields, endpoints or enum values is **not** breaking. |
+    | Headers | Every request sends `Accept: application/json` (otherwise Laravel may answer auth failures with an HTML redirect). Authenticated requests send `Authorization: Bearer <token>`. |
+    | Field names | JSON is `camelCase`. Query parameters are single lowercase words (`q`, `cursor`, `limit`). URLs use kebab-case (`friend-requests`). |
+    | IDs | 26-character lowercase ULID **strings** (time-sortable, not guessable). Clients treat them as opaque and never parse them. |
+    | Timestamps | RFC 3339, UTC, second precision, always with `Z` (`2026-09-30T08:15:00Z`). The server never sends display text such as "15 phút trước"; the client formats relative time. |
+    | Null handling | Keys are **always present**. A missing value is `null`. Empty collections are `[]`. Strings are `null` only where the schema says so (for example `content` is `""`, never `null`). Counts are non-negative integers. |
+    | URLs | Absolute `https` URLs (`http` only in local development). `null` when there is no image. |
+    | Envelope | One object: `{ "data": {...} }`. A collection: `{ "data": [...], "meta": { "nextCursor": "...", "hasMore": true } }`. Actions that only succeed return `204` with no body. |
+    | Unknown values | Clients must ignore unknown fields and must fall back gracefully on unknown enum values. |
+    | Language | The backend sends **identifiers, not UI text**. Flutter maps enums to Vietnamese labels (see the tables below). Error `message` strings are English developer text and must not be shown to users verbatim. |
+
+    ### Authentication (Sanctum)
+
+    * `register` and `login` return a plain-text token once: `{ "accessToken", "tokenType": "Bearer", "expiresAt" }`.
+      The response never contains the password or the token hash.
+    * Tokens expire **30 days** after creation (no sliding expiry, no refresh token in v1). After that the client must log in again.
+    * The Flutter client stores the token only in `flutter_secure_storage` and attaches it with a `dio` interceptor.
+    * A request with a missing, invalid, expired or revoked token gets `401` with `code: "unauthenticated"`. On that
+      response the client deletes the stored token and shows the login screen. **Login failure is deliberately `422`,
+      not `401`**, so a wrong password can never be confused with an expired session.
+    * `logout` revokes only the token used for the request. Other devices keep working.
+
+    ### Visibility and authorization model
+
+    | Resource | Who can see it |
+    |---|---|
+    | Post `public` | Any authenticated user |
+    | Post `friends` | The author and accepted friends of the author |
+    | Post `only_me` | The author only |
+    | Comments | Whoever can see the post |
+    | Story | The author and accepted friends (24 hours) |
+    | Profile (`GET /users/{user}`) | Any authenticated user (name, username, avatar, bio, counts) |
+    | Conversation and messages | Its two participants only |
+    | Notification | Its recipient only |
+
+    Something the caller is not allowed to see is answered with **`404`, not `403`**, so its existence is not leaked.
+    `403` is used when the resource is visible but the action is not allowed (for example deleting someone else's comment).
+
+    ### Cursor pagination
+
+    Every list endpoint uses the same query parameters `cursor` (opaque string from the previous `meta.nextCursor`)
+    and `limit`, and returns `meta: { nextCursor, hasMore }`. `nextCursor` is `null` when `hasMore` is `false`.
+    A cursor is only valid for the endpoint, filters and `q` it was issued for; otherwise the answer is `400 invalid_cursor`.
+    Ordering is documented per endpoint. Clients de-duplicate by `id`, because lists can change between pages.
+
+    ### Errors
+
+    All errors use one shape. `code` is stable and machine-readable; `errors` appears only for `422`.
+
+    ```json
+    { "message": "Validation failed.", "code": "validation_failed",
+      "errors": { "content": ["The content field is required."] } }
+    ```
+
+    | Status | Meaning | Typical `code` |
+    |---|---|---|
+    | 400 | Malformed request (bad JSON, bad cursor) | `bad_request`, `invalid_cursor` |
+    | 401 | Not authenticated / token expired | `unauthenticated` |
+    | 403 | Authenticated but not allowed | `forbidden`, `not_friends` |
+    | 404 | Not found **or not visible to the caller** | `not_found` |
+    | 409 | Valid request that conflicts with current state | `already_friends`, `friend_request_exists`, `idempotency_key_reused`, `request_in_progress` |
+    | 413 | Upload larger than the server limit | `payload_too_large` |
+    | 422 | Validation failed (including wrong login) | `validation_failed`, `invalid_credentials` |
+    | 429 | Rate limit exceeded (`Retry-After` header, seconds) | `too_many_requests` |
+    | 500 | Unexpected server error | `server_error` |
+
+    Production responses never contain exception classes, stack traces, SQL or file paths.
+
+    ### Uploads
+
+    Posts, stories and the avatar accept `multipart/form-data`. There is no separate upload endpoint.
+
+    * Field `image` (or `avatar`): `image/jpeg`, `image/png` or `image/webp`; at most **10 MB**; at most 8000 x 8000 px.
+    * The server validates the real file content (not only the extension), re-encodes the image, strips EXIF
+      metadata (including GPS) and stores it as `posts|stories|avatars/{yyyy}/{mm}/{ulid}.{jpg|png|webp}`
+      on the configured Laravel disk. The API returns the resulting absolute URL.
+    * Image URLs are unguessable but public (v1). See the review notes for the signed-URL alternative.
+    * The Flutter client should resize/compress with `image_picker` (`maxWidth`, `imageQuality`) before uploading.
+    * A file larger than the web server limit may be rejected with `413` before PHP runs.
+
+    ### Idempotency (recommended)
+
+    `POST /posts`, `/posts/{post}/comments`, `/stories` and `/conversations/{conversation}/messages` accept an optional
+    `Idempotency-Key` header (client-generated UUID). Repeating a request with the same key and body within 24 hours
+    returns the **original response** instead of creating a duplicate; the same key with a different body is `409`.
+    This protects against double taps and retries after network timeouts.
+
+    ### Rate limits (initial values, tunable)
+
+    | Scope | Limit |
+    |---|---|
+    | `POST /auth/login` | 5 per minute per email + IP |
+    | `POST /auth/register` | 10 per hour per IP |
+    | Any other authenticated request | 120 per minute per user |
+    | `POST /posts`, `POST /stories` | 30 per hour per user |
+    | `POST /posts/{post}/comments` | 120 per hour per user |
+    | `POST /conversations/{conversation}/messages` | 120 per minute per user |
+    | `POST /friend-requests` | 60 per hour per user |
+
+    ### Search
+
+    `q` is trimmed (max 100 characters); blank means "no filter". Matching is `contains`, case-insensitive **and accent-insensitive
+    for most characters** (MariaDB `utf8mb4_unicode_ci`; see the collation caveat in `x-database.charset` for stacked Vietnamese
+    diacritics), so `minh` also finds `Mình`. This intentionally differs from the current Flutter
+    `searchPosts()`, which is accent-sensitive. `%` and `_` in `q` are escaped. Posts match `content` or author `name`; users match
+    `name` or `username`.
+
+    ### Enum mapping (Flutter is responsible for labels)
+
+    | `privacy` | Flutter label |
+    |---|---|
+    | `public` | Công khai |
+    | `friends` | Bạn bè |
+    | `only_me` | Chỉ mình tôi |
+
+    | `feeling` | Flutter label (current UI) |
+    |---|---|
+    | `cheerful` | Cảm thấy vui (default) |
+    | `excited` | Hứng thú |
+    | `happy` | Hạnh phúc |
+
+    | `background` (story) | Gradient colors (from `StoryCreatorScreen`) |
+    |---|---|
+    | `indigo` (default) | `#5D6BFF` → `#9B8CFF` |
+    | `sunset` | `#FF7043` → `#FFC107` |
+    | `mint` | `#00B894` → `#26C6DA` |
+    | `berry` | `#E84393` → `#6C5CE7` |
+
+    | Notification `type` | Text composed by Flutter |
+    |---|---|
+    | `like` | đã thích bài viết của bạn |
+    | `comment` | đã bình luận trong bài viết của bạn |
+    | `share` | đã chia sẻ bài viết của bạn |
+    | `friend_request` | đã gửi lời mời kết bạn (was `friend` in the mock data) |
+    | `friend_accepted` **[NEW]** | Text to be defined in Flutter |
+    | `follow` **[NEW]** | đã bắt đầu theo dõi bạn |
+
+    ### Reading guide
+
+    Schemas carry `x-flutter-source` (the Flutter model they replace), `x-backend-entity` (the table that stores them),
+    `x-computed` on fields that are calculated and never stored, and `x-not-exposed` for Flutter fields that deliberately
+    have no API counterpart. The root `x-database` section proposes the MariaDB schema behind the API.
+servers:
+  - url: http://localhost:8000/api/v1
+    description: Local development (php artisan serve)
+  - url: https://api.socialhub.example/api/v1
+    description: Production (placeholder host)
+tags:
+  - name: Auth
+    description: "Registration, login and logout"
+  - name: Me
+    description: "The authenticated user's own account"
+  - name: Users
+    description: "Other users and their profiles"
+  - name: Friends
+    description: "Friend requests and friendships"
+  - name: Feed
+    description: "Home feed and Explore"
+  - name: Posts
+    description: "Creating, reading and deleting posts"
+  - name: Interactions
+    description: "Like, save, hide and share"
+  - name: Comments
+    description: "Comments on posts"
+  - name: Stories
+    description: "24-hour stories"
+  - name: Conversations
+    description: "Direct messages (polling)"
+  - name: Notifications
+    description: "Notifications for the current user"
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      operationId: register
+      summary: Create an account and sign in
+      description: |
+        **Authentication:** none. **Rate limit:** 10 per hour per IP.
+
+        Creates the user and returns a new token, so the client is signed in immediately.
+        A 6-digit verification code is emailed (see `POST /auth/email/verification`); nothing is blocked until the
+        email is verified, the client only shows a reminder (`Me.emailVerified`).
+
+        **Validation:** `name` 2-50 characters; `username` 3-30 characters, `a-z 0-9 _`, unique
+        (case-insensitive), stored **without** `@`; `email` valid, max 255, unique (case-insensitive);
+        `password` min 8, max 72 characters; `deviceName` optional, max 60 (label for the token).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RegisterRequest'}
+            example: {name: Minh Ánh, username: minh_anh, email: minh@example.com, password: correct-horse-battery, deviceName: iPhone 17 Pro}
+      responses:
+        '201':
+          description: Account created.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AuthResultEnvelope'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Sign in with email and password
+      description: |
+        **Authentication:** none. **Rate limit:** 5 per minute per email + IP.
+
+        Wrong email or password is `422` with `code: "invalid_credentials"` and a generic message that does not say
+        which of the two was wrong. Each successful login creates a new token; existing tokens stay valid.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LoginRequest'}
+      responses:
+        '200':
+          description: Signed in.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AuthResultEnvelope'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /auth/email/verification:
+    post:
+      tags: [Auth]
+      operationId: sendEmailVerificationCode
+      summary: "[NEW] Email me a verification code"
+      description: |
+        **Authentication:** required. **Rate limit:** 5 per hour per user (`429` after that).
+        Emails a new 6-digit code to the account's address; the previous code stops working. The code is valid for
+        15 minutes. Already verified: `409` with `code: already_verified`. The email is queued, so it can arrive a few
+        seconds later. (A code is also sent automatically when the account is created.)
+      responses:
+        '202': {description: The email was queued.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /auth/email/verify:
+    post:
+      tags: [Auth]
+      operationId: verifyEmail
+      summary: "[NEW] Confirm the emailed code"
+      description: |
+        **Authentication:** required. **Rate limit:** 10 per hour per user.
+        Wrong, expired or missing code: `422` with `code: invalid_code`. After 5 wrong tries the code is discarded and a new
+        one must be requested. Verifying again when already verified is `200` (idempotent). Returns the updated account.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CodeRequest'}
+            example: {code: '482913'}
+      responses:
+        '200':
+          description: 'The account, with `emailVerified: true`.'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MeEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /auth/password/forgot:
+    post:
+      tags: [Auth]
+      operationId: forgotPassword
+      summary: "[NEW] Email me a password reset code"
+      description: |
+        **Authentication:** none. **Rate limit:** 5 per hour per email + IP.
+        Always answers `202`, whether or not an account with that email exists, so the endpoint cannot be used to find out who
+        has an account. If it does exist, a 6-digit code (valid 15 minutes) is emailed; asking again replaces it.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ForgotPasswordRequest'}
+      responses:
+        '202': {description: If the account exists, a code was queued.}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /auth/password/reset:
+    post:
+      tags: [Auth]
+      operationId: resetPassword
+      summary: "[NEW] Set a new password with the emailed code"
+      description: |
+        **Authentication:** none. **Rate limit:** 10 per hour per email + IP.
+        Wrong, expired or unknown email/code is one generic `422` with `code: invalid_code`. After 5 wrong tries the code is
+        discarded. On success the password is changed, **every token of the account is revoked** (all devices are signed out)
+        and the client signs in again with the new password. The password rules are those of `register`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ResetPasswordRequest'}
+      responses:
+        '204': {description: Password changed.}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Revoke the current token
+      description: |
+        **Authentication:** required. Revokes only the token sent with this request. Calling it with an already
+        revoked token returns `401`, which the client treats as "already signed out".
+      responses:
+        '204': {description: Token revoked.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /me:
+    get:
+      tags: [Me]
+      operationId: getMe
+      summary: Get the authenticated user
+      description: |
+        **Authentication:** required. Called at app start after a token is found, to replace the mock `currentUser`.
+      responses:
+        '200':
+          description: The current user.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MeEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+    patch:
+      tags: [Me]
+      operationId: updateMe
+      summary: Update name and bio
+      description: |
+        **Authentication:** required. JSON only (images use `POST /me/avatar`, because PHP does not parse
+        multipart bodies for `PATCH`). Only the fields present in the body are changed.
+
+        **Validation:** `name` 2-50 characters, not blank after trimming (mirrors the Edit Profile screen);
+        `bio` max 300 characters, may be `""` or `null` (both clear it).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateMeRequest'}
+            example: {name: Lê Anh Hùng, bio: Product Designer}
+      responses:
+        '200':
+          description: The updated user.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MeEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+    delete:
+      tags: [Me]
+      operationId: deleteAccount
+      summary: "[NEW] Delete my account"
+      description: |
+        **Authentication:** required. **Rate limit:** the general limit.
+        Requires the current `password` (wrong: `422` with `code: invalid_credentials`). The account is soft-deleted
+        immediately: all its tokens are revoked, its friendships and friend requests are removed, and its posts, comments,
+        stories and messages disappear from every other user's screens. After a 30-day retention period a scheduled job
+        deletes the rows and image files for good. The email and username stay reserved during the retention period.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DeleteAccountRequest'}
+      responses:
+        '204': {description: Account deleted.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /me/devices:
+    put:
+      tags: [Me]
+      operationId: registerDevice
+      summary: "[NEW] Register this phone for push notifications"
+      description: |
+        **Authentication:** required. Stores the Firebase Cloud Messaging `token` of the phone for the caller. A token
+        that was registered by another account moves to the caller (the same phone signed in as someone else).
+        Calling it again with the same token is harmless. Pushes are sent for new notifications and chat messages
+        by a queued job; with FCM not configured on the server nothing is sent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DeviceRequest'}
+      responses:
+        '204': {description: Registered.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+    delete:
+      tags: [Me]
+      operationId: unregisterDevice
+      summary: "[NEW] Stop push notifications on this phone"
+      description: |
+        **Authentication:** required. Forgets the `token` if it belongs to the caller; an unknown token is not an error.
+        The app calls it before signing out.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: {type: string, maxLength: 512}
+      responses:
+        '204': {description: Done.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /me/avatar:
+    post:
+      tags: [Me]
+      operationId: setAvatar
+      summary: "[NEW] Upload a new avatar"
+      description: |
+        **Authentication:** required. `multipart/form-data` with an `avatar` image (see Uploads). The previous
+        avatar file is deleted. Not used by the current Flutter UI (`UserModel.copyWith` already supports `avatarUrl`).
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: {$ref: '#/components/schemas/AvatarUploadRequest'}
+            encoding:
+              avatar: {contentType: 'image/jpeg, image/png, image/webp'}
+      responses:
+        '200':
+          description: The updated user.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MeEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+    delete:
+      tags: [Me]
+      operationId: removeAvatar
+      summary: "[NEW] Remove the avatar"
+      description: '**Authentication:** required. Idempotent: succeeds even if there is no avatar.'
+      responses:
+        '200':
+          description: The updated user (`avatarUrl` is `null`).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MeEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /me/cover:
+    post:
+      tags: [Me]
+      operationId: setCover
+      summary: Upload a cover image (profile header)
+      description: |
+        **Authentication:** required. `multipart/form-data` with a `cover` image (see Uploads). The previous cover
+        file is deleted.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [cover]
+              properties:
+                cover: {type: string, format: binary, description: 'image/jpeg, image/png or image/webp, max 10 MB.'}
+            encoding:
+              cover: {contentType: 'image/jpeg, image/png, image/webp'}
+      responses:
+        '200':
+          description: The updated user.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MeEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+    delete:
+      tags: [Me]
+      operationId: removeCover
+      summary: Remove the cover image
+      description: '**Authentication:** required. Idempotent.'
+      responses:
+        '200':
+          description: The updated user (`coverUrl` is `null`).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MeEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /me/saved-posts:
+    get:
+      tags: [Me]
+      operationId: listSavedPosts
+      summary: "[NEW] My saved posts"
+      description: |
+        **Authentication:** required. The posts the caller saved with `PUT /posts/{post}/save`, **most recently saved
+        first** (saved time descending, then post `id` descending). Only posts the caller may still see are listed: a
+        post that was deleted, or whose visibility no longer includes the caller (for example the author set it to
+        `only_me`, or they are no longer friends), is skipped. Posts the caller hid from their feed are included
+        (`isHidden: true`); hiding does not affect saving. Every item has `isSaved: true`.
+      parameters:
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: A page of posts.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PostPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /users:
+    get:
+      tags: [Users]
+      operationId: listUsers
+      summary: Search users (Friends screen)
+      description: |
+        **Authentication:** required. Returns other users, never the caller (the Friends screen excludes the
+        current user). Each item carries the caller's `friendship` with that user, which drives the
+        "Thêm bạn / Đang chờ / Bạn bè" button.
+
+        **Order:** `name` ascending, then `id`. **Query:** `q` (see Search), `relationship` filters by friendship status.
+      parameters:
+        - name: q
+          in: query
+          schema: {type: string, maxLength: 100}
+        - name: relationship
+          in: query
+          description: Only users with this friendship status towards the caller.
+          schema: {$ref: '#/components/schemas/OtherFriendshipStatus'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: A page of users.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UserPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /users/{user}:
+    get:
+      tags: [Users]
+      operationId: getUser
+      summary: Get a user's profile
+      description: |
+        **Authentication:** required. Any authenticated user may view any profile, except one who blocked the caller
+        (`404`). Use `GET /users/{user}/posts` for their posts. For the caller's own id, `friendship.status` is
+        `self`. `isBlocked` tells whether the caller blocked this user (their posts are then not listed).
+      parameters:
+        - {$ref: '#/components/parameters/UserId'}
+      responses:
+        '200':
+          description: The profile.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UserProfileEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /users/{user}/follow:
+    put:
+      tags: [Users]
+      operationId: followUser
+      summary: Follow a user
+      description: |
+        **Authentication:** required. **Idempotent.** Following is one-way and needs no approval. It is separate from
+        friendship (a friend can also be followed). The followed person gets one `follow` notification. A followed
+        person's **public** posts appear in the follower's feed (`filter=all` and `filter=following`). Following
+        yourself is `422`; a user who blocked the caller, or whom the caller blocked, is `404`. Blocking someone
+        removes follows in both directions. Limited like friend requests (60 per hour).
+      parameters:
+        - {$ref: '#/components/parameters/UserId'}
+      responses:
+        '204': {description: The caller follows the user.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+    delete:
+      tags: [Users]
+      operationId: unfollowUser
+      summary: Stop following a user
+      description: '**Authentication:** required. Idempotent.'
+      parameters:
+        - {$ref: '#/components/parameters/UserId'}
+      responses:
+        '204': {description: The caller does not follow the user.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /users/{user}/followers:
+    get:
+      tags: [Users]
+      operationId: listFollowers
+      summary: People who follow a user
+      description: |
+        **Authentication:** required. Followers of `{user}`, without the caller, blocked people and deleted accounts.
+        A user who blocked the caller is `404`. Items are `UserListItem`. **Order:** `name`, then `id`.
+      parameters:
+        - {$ref: '#/components/parameters/UserId'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: A page of users.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UserPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /users/{user}/following:
+    get:
+      tags: [Users]
+      operationId: listFollowing
+      summary: People a user follows
+      description: 'Same as `GET /users/{user}/followers`, for the people `{user}` follows.'
+      parameters:
+        - {$ref: '#/components/parameters/UserId'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: A page of users.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UserPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /me/presence:
+    post:
+      tags: [Me]
+      operationId: touchPresence
+      summary: Say "I am online"
+      description: |
+        **Authentication:** required. Every authenticated request already refreshes the caller's `lastSeenAt` (at most
+        once a minute); this empty call is for an app that is open but idle (for example when it returns to the
+        foreground). Call it about every minute while the app is in the foreground.
+      responses:
+        '204': {description: Noted.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /conversations/{conversation}/typing:
+    put:
+      tags: [Conversations]
+      operationId: setTyping
+      summary: Say "I am typing"
+      description: |
+        **Authentication:** required. **Authorization:** participants only (else `404`), and only while the two are
+        friends (`403`, `code: not_friends`). Marks the caller as typing for the next 6 seconds; repeat about every
+        3 seconds while the person keeps typing. Sending a message clears it. The other person sees it as
+        `meta.otherTyping` of `GET .../messages` (the polling call), so there is no delay beyond the polling interval.
+      parameters:
+        - {$ref: '#/components/parameters/ConversationId'}
+      responses:
+        '204': {description: Noted.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+    delete:
+      tags: [Conversations]
+      operationId: clearTyping
+      summary: Say "I stopped typing"
+      description: '**Authentication:** required. Idempotent. Participants only (else `404`).'
+      parameters:
+        - {$ref: '#/components/parameters/ConversationId'}
+      responses:
+        '204': {description: Noted.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /users/suggestions:
+    get:
+      tags: [Users]
+      operationId: listSuggestedUsers
+      summary: People you may know (Friends screen)
+      description: |
+        **Authentication:** required. People the caller has **no relationship with at all** (not a friend, no pending
+        request either way, not blocked, not themselves). Ranked by the number of friends in common
+        (`mutualFriendsCount` descending); people with none follow, newest accounts first, so a new account still
+        gets a list. Items are `UserListItem` (their `friendship.status` is always `none`).
+
+        **Paging:** the order is computed, so the `cursor` is an opaque position and the list can shift slightly
+        between pages.
+      parameters:
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: A page of users.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UserPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /users/{user}/friends:
+    get:
+      tags: [Users]
+      operationId: listUserFriends
+      summary: A user's friends (profile "Friends" tab)
+      description: |
+        **Authentication:** required. The accepted friends of `{user}` (for the caller's own id, the caller's
+        friends). The caller is left out of the list, and so is anyone who blocked or is blocked by the caller.
+        A user who blocked the caller is `404`. Items are `UserListItem`, so the caller's own relationship to each
+        friend (and the mutual friends) is there for the friend buttons.
+
+        **Order:** `name` ascending, then `id`.
+      parameters:
+        - {$ref: '#/components/parameters/UserId'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: A page of users.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UserPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /users/{user}/photos:
+    get:
+      tags: [Users]
+      operationId: listUserPhotos
+      summary: A user's photos (profile "Photos" tab)
+      description: |
+        **Authentication:** required. The images of the posts written by `{user}` that the caller may see (same
+        visibility rule as `GET /users/{user}/posts`). One item per **image** (a post with 3 images gives 3 items, same `postId`). A user who blocked
+        the caller is `404`.
+
+        **Order:** newest image first.
+      parameters:
+        - {$ref: '#/components/parameters/UserId'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: A page of photos.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PhotoPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /users/{user}/block:
+    put:
+      tags: [Users]
+      operationId: blockUser
+      summary: Block a user
+      description: |
+        **Authentication:** required. **Idempotent.** Blocking removes any friendship or friend request between the
+        two people, and from then on each side is invisible to the other: neither sees the other's posts, comments,
+        stories or profile (`404`), in lists or search; no friend request, message or notification can pass between
+        them, and an existing conversation disappears from both lists. Blocking yourself is `422`.
+      parameters:
+        - {$ref: '#/components/parameters/UserId'}
+      responses:
+        '204': {description: The user is blocked.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+    delete:
+      tags: [Users]
+      operationId: unblockUser
+      summary: Unblock a user
+      description: |
+        **Authentication:** required. **Idempotent.** The two people become strangers again; a removed friendship is
+        not restored.
+      parameters:
+        - {$ref: '#/components/parameters/UserId'}
+      responses:
+        '204': {description: The user is not blocked.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /me/blocks:
+    get:
+      tags: [Users]
+      operationId: listBlockedUsers
+      summary: People the caller blocked
+      description: '**Authentication:** required. Most recently blocked first. Accounts that were deleted are left out.'
+      parameters:
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: A page of users.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BlockedUserPage'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /reports:
+    post:
+      tags: [Users]
+      operationId: createReport
+      summary: Report a post, a comment or a user
+      description: |
+        **Authentication:** required. The target must exist and be visible to the caller (else `404`); reporting
+        yourself or your own content is `422`. **Idempotent:** reporting the same target again returns the existing
+        report with `200` instead of creating another. Reports are stored for review by the operators; nothing is
+        removed automatically. Limited to 20 per hour.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateReportRequest'}
+      responses:
+        '200':
+          description: This target was already reported by the caller.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReportEnvelope'}
+        '201':
+          description: Report stored.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReportEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /users/{user}/posts:
+    get:
+      tags: [Users]
+      operationId: listUserPosts
+      summary: Posts written by a user (Profile screen)
+      description: |
+        **Authentication:** required. **Authorization:** only posts the caller may see (see visibility model), so a
+        stranger sees `public` posts, a friend sees `public` + `friends`, the author sees everything. Posts the caller
+        has hidden from their feed are **included** (Profile ignores "hide", as it does today).
+
+        **Order:** `createdAt` descending, then `id` descending.
+      parameters:
+        - {$ref: '#/components/parameters/UserId'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: A page of posts.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PostPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /friend-requests:
+    get:
+      tags: [Friends]
+      operationId: listFriendRequests
+      summary: "[NEW] List pending friend requests"
+      description: |
+        **Authentication:** required. Lists pending requests only, newest first. The Flutter app has no screen for
+        this yet; without it a request can never be accepted.
+      parameters:
+        - name: direction
+          in: query
+          description: '`incoming` = sent to me, `outgoing` = sent by me.'
+          schema: {type: string, enum: [incoming, outgoing], default: incoming}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: A page of pending requests.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FriendRequestPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+    post:
+      tags: [Friends]
+      operationId: sendFriendRequest
+      summary: Send a friend request ("Thêm bạn")
+      description: |
+        **Authentication:** required. **Rate limit:** 60 per hour.
+
+        **Validation:** `userId` must exist and must not be the caller (`422`).
+        **Conflicts (`409`):** `already_friends`; `friend_request_exists` (the caller already sent one, or the other
+        user already sent one to the caller; the client should reload `GET /users/{user}` to see which).
+        Creates a `friend_request` notification for the receiver.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/FriendRequestCreate'}
+      responses:
+        '201':
+          description: Request created.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FriendRequestEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /friend-requests/{friendRequest}/accept:
+    post:
+      tags: [Friends]
+      operationId: acceptFriendRequest
+      summary: "[NEW] Accept a friend request"
+      description: |
+        **Authentication:** required. **Authorization:** only the **receiver** of the request. Anyone else gets `404`.
+        Turns the request into a friendship and creates a `friend_accepted` notification for the sender.
+        Returns the sender's profile with `friendship.status = friends`. Accepting an already accepted request is
+        idempotent and returns the same profile.
+
+        Note: the current Flutter "Đang chờ → Bạn bè" tap simulates acceptance locally; with the backend that tap
+        can no longer make someone a friend.
+      parameters:
+        - {$ref: '#/components/parameters/FriendRequestId'}
+      responses:
+        '200':
+          description: Now friends.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UserProfileEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /friend-requests/{friendRequest}:
+    delete:
+      tags: [Friends]
+      operationId: deleteFriendRequest
+      summary: "[NEW] Cancel or decline a pending friend request"
+      description: |
+        **Authentication:** required. **Authorization:** the sender (cancel) or the receiver (decline). Deleting the row
+        lets either person send a new request later (no "declined" state in v1). `404` if it does not exist, is not
+        pending, or belongs to someone else.
+      parameters:
+        - {$ref: '#/components/parameters/FriendRequestId'}
+      responses:
+        '204': {description: Request removed.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /friends/{user}:
+    delete:
+      tags: [Friends]
+      operationId: unfriend
+      summary: "[NEW] Remove a friend"
+      description: |
+        **Authentication:** required. Idempotent: `204` even when the two users are not friends. `404` only when the
+        user does not exist. After this the users no longer see each other's `friends`-only posts and stories.
+      parameters:
+        - {$ref: '#/components/parameters/UserId'}
+      responses:
+        '204': {description: They are not friends (any more).}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /feed:
+    get:
+      tags: [Feed]
+      operationId: getFeed
+      summary: Home feed
+      description: |
+        **Authentication:** required.
+
+        **Contents:** the caller's own posts plus posts of accepted friends, limited to what the caller may see
+        (own posts: any privacy; friends' posts: `public` and `friends`). Posts the caller **hid** are excluded.
+        Strangers' posts do not appear here (they are found through Explore), so a brand-new account starts with an empty feed.
+
+        **Search:** `q` filters the feed by post content or author name (Home search). Hidden posts never come back
+        through search.
+
+        **Followed people:** the public posts of people the caller follows (not friends) also appear. **Tabs (`filter`):** `all` (default) is the list above. `friends` keeps only the posts of accepted friends. `following` keeps only the posts of people the caller follows.
+        `popular` keeps the last 7 days and sorts by likes (then `id`), like Explore's trending, but only over the
+        posts of this feed. The cursor of one filter is rejected on another.
+
+        **Order:** `createdAt` descending, then `id` descending (`popular`: `likes` descending, then `id`).
+      parameters:
+        - name: q
+          in: query
+          schema: {type: string, maxLength: 100}
+        - name: filter
+          in: query
+          schema: {type: string, enum: [all, friends, following, popular], default: all}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: A page of posts.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PostPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /explore:
+    get:
+      tags: [Feed]
+      operationId: getExplore
+      summary: Explore
+      description: |
+        **Authentication:** required.
+
+        **Contents:** `public` posts from every user, including the caller. Posts the caller hid are **not** excluded
+        (Explore ignores "hide" today); use `isHidden` if the client wants to dim them.
+
+        **Filters** (`filter`, matching the three Explore chips):
+
+        * `for_you` (default): newest first (`createdAt` desc, `id` desc).
+        * `trending`: public posts from the last 7 days (server setting), most liked first (`likes` desc, then `id` desc).
+          Counts can change between pages, so a post may repeat or be skipped; clients de-duplicate by `id`.
+        * `short_video`: **reserved**. Posts have no video support in v1, so this always returns an empty page.
+          It exists so the "Video ngắn" chip needs no special case.
+
+        **Search:** `q` filters by content or author name and combines with `filter`.
+      parameters:
+        - name: filter
+          in: query
+          schema: {type: string, enum: [for_you, trending, short_video], default: for_you}
+        - name: q
+          in: query
+          schema: {type: string, maxLength: 100}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: A page of posts.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PostPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /posts:
+    post:
+      tags: [Posts]
+      operationId: createPost
+      summary: Create a post
+      description: |
+        **Authentication:** required. **Rate limit:** 30 per hour. Supports `Idempotency-Key`.
+
+        `multipart/form-data` when images are attached; `application/json` otherwise.
+
+        **Validation** (mirrors `CreatePostScreen._submitPost`, plus server limits):
+        * `content`: string, max 5000 characters, trimmed. May be empty **only** if an `image` is present.
+        * `images[]`: optional, 1-10 images (see Uploads), kept in the order sent. `image` (one file) is still accepted
+          and means a list of one; sending both is `422` on `images`. More than 10 is `422`.
+        * A post needs non-blank `content` **or** an image; otherwise `422` on `content`.
+        * `feeling`: optional, one of `cheerful`, `excited`, `happy`; `null` means no feeling.
+        * `privacy`: optional, one of `public`, `friends`, `only_me`; default `public`.
+
+        The author is always the caller. Counts start at 0. Nothing here changes the caller's feed order beyond
+        the new post appearing first.
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: {$ref: '#/components/schemas/CreatePostRequest'}
+            encoding:
+              image: {contentType: 'image/jpeg, image/png, image/webp'}
+              images: {contentType: 'image/jpeg, image/png, image/webp'}
+          application/json:
+            schema: {$ref: '#/components/schemas/CreatePostJsonRequest'}
+            example: {content: Hello everyone, feeling: excited, privacy: public}
+      responses:
+        '201':
+          description: Post created.
+          headers:
+            Location:
+              description: URL of the new post.
+              schema: {type: string}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PostEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /posts/{post}:
+    get:
+      tags: [Posts]
+      operationId: getPost
+      summary: Get one post
+      description: |
+        **Authentication:** required. **Authorization:** the post's visibility rule. A post the caller may not see
+        is `404`. Used for deep links and notification targets. Hidden posts are returned (with `isHidden: true`).
+      parameters:
+        - {$ref: '#/components/parameters/PostId'}
+      responses:
+        '200':
+          description: The post.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PostEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+    patch:
+      tags: [Posts]
+      operationId: updatePostPrivacy
+      summary: Change who can see a post
+      description: |
+        **Authentication:** required. **Authorization:** the author only (a visible post of someone else is `403`, a
+        post the caller cannot see is `404`). Only `privacy` can be changed; the new value is effective at once for
+        every endpoint (feed, Explore, profile, direct links). Notifications already sent stay, but opening one whose
+        post the person can no longer see is a `404`. Setting the value it already has succeeds.
+      parameters:
+        - {$ref: '#/components/parameters/PostId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [privacy]
+              properties:
+                privacy: {$ref: '#/components/schemas/Privacy'}
+      responses:
+        '200':
+          description: The updated post.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PostEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+    delete:
+      tags: [Posts]
+      operationId: deletePost
+      summary: "[NEW] Delete a post"
+      description: |
+        **Authentication:** required. **Authorization:** the author only. A visible post that belongs to someone
+        else is `403`; a post the caller cannot see is `404`. The post is soft-deleted immediately (it disappears from
+        every endpoint) and its image file is removed by a queued job. Its likes, saves, hidden marks, comments and
+        notifications go with it.
+      parameters:
+        - {$ref: '#/components/parameters/PostId'}
+      responses:
+        '204': {description: Post deleted.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /posts/{post}/like:
+    put:
+      tags: [Interactions]
+      operationId: likePost
+      summary: Like a post
+      description: |
+        **Authentication:** required. **Authorization:** the caller must be able to see the post (else `404`).
+        **Idempotent:** liking twice keeps one like. The response is the **authoritative state**, so the client can
+        replace its optimistic value. Creates a `like` notification for the author (not for self-likes; at most one
+        per person and post, even if they like/unlike repeatedly).
+      parameters:
+        - {$ref: '#/components/parameters/PostId'}
+      responses:
+        '200':
+          description: Current like state.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LikeStateEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+    delete:
+      tags: [Interactions]
+      operationId: unlikePost
+      summary: Remove a like
+      description: '**Authentication:** required. Idempotent: unliking a post that is not liked succeeds. Same authorization and response as `PUT`.'
+      parameters:
+        - {$ref: '#/components/parameters/PostId'}
+      responses:
+        '200':
+          description: Current like state.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LikeStateEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /posts/{post}/save:
+    put:
+      tags: [Interactions]
+      operationId: savePost
+      summary: Save a post
+      description: |
+        **Authentication:** required. **Authorization:** the caller must be able to see the post (else `404`).
+        Idempotent. Saved state is private to the caller. The saved posts are listed by `GET /me/saved-posts`.
+      parameters:
+        - {$ref: '#/components/parameters/PostId'}
+      responses:
+        '200':
+          description: Current save state.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SaveStateEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+    delete:
+      tags: [Interactions]
+      operationId: unsavePost
+      summary: Unsave a post
+      description: '**Authentication:** required. Idempotent. Same authorization and response as `PUT`.'
+      parameters:
+        - {$ref: '#/components/parameters/PostId'}
+      responses:
+        '200':
+          description: Current save state.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SaveStateEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /posts/{post}/hide:
+    put:
+      tags: [Interactions]
+      operationId: hidePost
+      summary: Hide a post from my feed
+      description: |
+        **Authentication:** required. **Authorization:** the caller must be able to see the post (else `404`).
+        Idempotent. Only the caller's own `GET /feed` changes; the post is not deleted or hidden for anyone else,
+        and it still appears in Explore and on profiles. This is the server side of the app's "Ẩn bài viết".
+      parameters:
+        - {$ref: '#/components/parameters/PostId'}
+      responses:
+        '200':
+          description: Current hidden state.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HideStateEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+    delete:
+      tags: [Interactions]
+      operationId: unhidePost
+      summary: Undo hide ("Hoàn tác")
+      description: '**Authentication:** required. Idempotent. Same authorization and response as `PUT`.'
+      parameters:
+        - {$ref: '#/components/parameters/PostId'}
+      responses:
+        '200':
+          description: Current hidden state.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HideStateEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /posts/{post}/shares:
+    post:
+      tags: [Interactions]
+      operationId: sharePost
+      summary: "[NEW] Record that I shared a post"
+      description: |
+        **Authentication:** required. **Authorization:** the caller must be able to see the post (else `404`).
+        The current app only opens a share sheet ("Sao chép liên kết", "Gửi trong tin nhắn") and never changes the
+        count. This endpoint records the share so `shares` can be real. Each user counts **once per post**: repeating
+        the call is idempotent and returns the same count. It does not create a repost or send the message itself
+        (sending uses the conversations endpoints). Creates a `share` notification for the author (not for self-shares).
+        May be deferred; until then `shares` is always `0`.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ShareRequest'}
+      parameters:
+        - {$ref: '#/components/parameters/PostId'}
+      responses:
+        '200':
+          description: Current share count.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ShareStateEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /posts/{post}/comments:
+    get:
+      tags: [Comments]
+      operationId: listComments
+      summary: List comments of a post
+      description: |
+        **Authentication:** required. **Authorization:** whoever can see the post (else `404`).
+        Flat list (no replies in v1). **Order:** `createdAt` descending, then `id` descending (newest first).
+      parameters:
+        - {$ref: '#/components/parameters/PostId'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: A page of comments.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CommentPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+    post:
+      tags: [Comments]
+      operationId: createComment
+      summary: Add a comment
+      description: |
+        **Authentication:** required. **Rate limit:** 120 per hour. Supports `Idempotency-Key`.
+        **Authorization:** whoever can see the post (else `404`).
+
+        **Validation:** `content` required, 1-1000 characters after trimming.
+        Creates a `comment` notification for the post author (not for self-comments).
+        `meta.commentsCount` is the post's new comment count.
+      parameters:
+        - {$ref: '#/components/parameters/PostId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateCommentRequest'}
+            example: {content: Hay quá!}
+      responses:
+        '201':
+          description: Comment created.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CommentCreatedEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /comments/{comment}:
+    delete:
+      tags: [Comments]
+      operationId: deleteComment
+      summary: Delete a comment
+      description: |
+        **Authentication:** required. **Authorization:** the comment's author **or** the author of the post.
+        Anyone else who can see the comment gets `403`; a comment on a post the caller cannot see is `404`.
+      parameters:
+        - {$ref: '#/components/parameters/CommentId'}
+      responses:
+        '204': {description: Comment deleted.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /stories:
+    get:
+      tags: [Stories]
+      operationId: listStories
+      summary: Active stories (Home story row)
+      description: |
+        **Authentication:** required. Stories created less than 24 hours ago by the caller and the caller's accepted
+        friends. The list is flat (one item per story, like today's `Story` model); it is **not** grouped by author.
+
+        **Order:** the caller's own stories first (newest first), then everyone else's newest first
+        (`createdAt` desc, `id` desc). The "Thêm tin" tile is a client-only tile and is not part of this list.
+      parameters:
+        - {$ref: '#/components/parameters/Cursor'}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 50, default: 30}
+      responses:
+        '200':
+          description: A page of stories.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/StoryPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+    post:
+      tags: [Stories]
+      operationId: createStory
+      summary: Create a story
+      description: |
+        **Authentication:** required. **Rate limit:** 30 per hour. Supports `Idempotency-Key`.
+        `multipart/form-data` with an `image`, or `application/json` for a text story.
+
+        **Validation:** `text` max 500 characters, trimmed; `background` one of `indigo`, `sunset`, `mint`, `berry`
+        (default `indigo`); `image` optional (see Uploads). A story needs non-blank `text` **or** an `image`.
+        `expiresAt` is set to `createdAt + 24 hours`.
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: {$ref: '#/components/schemas/CreateStoryRequest'}
+            encoding:
+              image: {contentType: 'image/jpeg, image/png, image/webp'}
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateStoryJsonRequest'}
+            example: {text: Tin của tôi, background: sunset}
+      responses:
+        '201':
+          description: Story created.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/StoryEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /stories/{story}:
+    delete:
+      tags: [Stories]
+      operationId: deleteStory
+      summary: "[NEW] Delete my story"
+      description: |
+        **Authentication:** required. **Authorization:** the author only (`403` for someone else's visible story,
+        `404` if not visible). Expired stories are purged automatically by a scheduled job.
+      parameters:
+        - {$ref: '#/components/parameters/StoryId'}
+      responses:
+        '204': {description: Story deleted.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /stories/{story}/view:
+    post:
+      tags: [Stories]
+      operationId: markStoryViewed
+      summary: Mark a story as viewed
+      description: |
+        **Authentication:** required. **Authorization:** the caller must be able to see the story (else `404`).
+        Idempotent. Viewing your own story does nothing. Makes `isViewed` true for the caller from then on.
+        Call it once when the story viewer shows a story.
+      parameters:
+        - {$ref: '#/components/parameters/StoryId'}
+      responses:
+        '204': {description: Recorded.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /conversations:
+    get:
+      tags: [Conversations]
+      operationId: listConversations
+      summary: My conversations (Messages screen)
+      description: |
+        **Authentication:** required. Conversations the caller takes part in, with the other participant, the last
+        message and the caller's unread count. A conversation that has no message yet is **not listed** (it still
+        exists and can be opened with the id returned by `POST /conversations`).
+
+        **Order:** last activity descending (`updatedAt` desc, then `id` desc).
+
+        **Polling:** while the Messages screen is open, the client repeats this request every 15-30 seconds.
+        There is no push or WebSocket in v1.
+
+        **Search:** `q` keeps the conversations whose other participant's name or username contains the text
+        (accent-insensitive, `%` and `_` are literal). The cursor of one query is rejected on another.
+      parameters:
+        - name: q
+          in: query
+          schema: {type: string, maxLength: 100}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: A page of conversations.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ConversationPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+    post:
+      tags: [Conversations]
+      operationId: startConversation
+      summary: "[NEW] Start (or get) a direct conversation"
+      description: |
+        **Authentication:** required. **Authorization:** the target must be an accepted **friend** (`403`,
+        `code: not_friends`). There is exactly one direct conversation per pair of users, so this returns
+        the existing one (`200`) or creates it (`201`). Concurrent calls from both sides still yield one row.
+
+        The Flutter app can currently only open seeded conversations; without this endpoint a real user could never
+        start chatting.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateConversationRequest'}
+      responses:
+        '200':
+          description: The conversation already existed.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ConversationEnvelope'}
+        '201':
+          description: The conversation was created.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ConversationEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /conversations/{conversation}/messages:
+    get:
+      tags: [Conversations]
+      operationId: listMessages
+      summary: Messages of a conversation
+      description: |
+        **Authentication:** required. **Authorization:** participants only; anyone else gets `404`.
+
+        Two mutually exclusive modes (sending both `cursor` and `after` is `422`):
+
+        1. **History (default):** newest first (`createdAt` desc, `id` desc), paged with `cursor` ("load older").
+           The Chat screen shows messages oldest-to-newest, so the client reverses each page.
+        2. **Polling with `after`:** returns messages **newer** than the message with id `after`, oldest first, up to
+           `limit`. `meta.nextCursor` is always `null`; if `hasMore` is `true` the client repeats the call with the id
+           of the last message it received. Poll every 3-5 seconds while a chat is open, and de-duplicate by `id`
+           (a message created at the same instant as another may arrive on the next poll). `after` of an unknown id is `404`.
+
+        Both modes also return `meta.otherTyping` (boolean): the other participant sent `PUT .../typing` in the last
+        6 seconds.
+      parameters:
+        - {$ref: '#/components/parameters/ConversationId'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - name: after
+          in: query
+          description: Id of the newest message the client already has (polling mode).
+          schema: {$ref: '#/components/schemas/Id'}
+        - {$ref: '#/components/parameters/MessageLimit'}
+      responses:
+        '200':
+          description: A page of messages.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MessagePage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+    post:
+      tags: [Conversations]
+      operationId: sendMessage
+      summary: Send a message
+      description: |
+        **Authentication:** required. **Rate limit:** 120 per minute. Supports `Idempotency-Key` (recommended: a
+        retry after a timeout must not send the text twice). **Authorization:** participants only (else `404`).
+        Sending is only allowed while the two users are still friends (`403`, `code: not_friends`).
+
+        **Validation:** `text` is 0-2000 characters after trimming and may be empty **only** when the message has
+        `attachments` (otherwise `422` on `text`). `attachments[]` holds up to 5 files, each max 10 MB: images (JPEG,
+        PNG, WebP; re-encoded like post images) or documents (`pdf`, `doc`, `docx`, `xls`, `xlsx`, `ppt`, `pptx`,
+        `txt`, `csv`, `zip`). Other types are `422` on `attachments.N`. With attachments the request is
+        `multipart/form-data`. Sending also marks the conversation as read for the sender, updates `lastMessage` and `updatedAt`,
+        and raises the other participant's `unreadCount`. Messages do not create notifications.
+      parameters:
+        - {$ref: '#/components/parameters/ConversationId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateMessageRequest'}
+            example: {text: Chào bạn!}
+          multipart/form-data:
+            schema: {$ref: '#/components/schemas/CreateMessageMultipartRequest'}
+      responses:
+        '201':
+          description: Message created.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MessageEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /conversations/{conversation}/read:
+    post:
+      tags: [Conversations]
+      operationId: markConversationRead
+      summary: Mark a conversation as read
+      description: |
+        **Authentication:** required. **Authorization:** participants only (else `404`).
+        Sets the caller's read marker to the newest message that exists when the request is handled, or to
+        `upToMessageId` when given (which must belong to this conversation). The marker never moves backwards.
+        Idempotent. Call it when the Chat screen opens and when new messages arrive while it is open.
+      parameters:
+        - {$ref: '#/components/parameters/ConversationId'}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MarkReadRequest'}
+      responses:
+        '204': {description: Marked as read.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /notifications:
+    get:
+      tags: [Notifications]
+      operationId: listNotifications
+      summary: My notifications
+      description: |
+        **Authentication:** required. Only the caller's notifications, newest first (`createdAt` desc, then `id` desc).
+        Notifications are created by queued jobs, so they can appear a few seconds after the action that caused them.
+        Each item names the actor and the related ids; **the text and icon are composed by Flutter from `type`**
+        (see the Notification type table). `relatedContent` is a short excerpt read at request time: the comment text for `comment`, the post text for
+        `like` and `share`, and `null` for friend notifications (or when the post has no text).
+
+        **Filters:** `category` = `interactions` (`like`, `comment`, `share`) or `friends` (`friend_request`,
+        `friend_accepted`, `follow`); `unread=true` keeps only the unread ones. They combine. The cursor of one filter is
+        rejected on another. Notifications from people who blocked, or are blocked by, the caller are never listed.
+      parameters:
+        - name: category
+          in: query
+          schema: {type: string, enum: [interactions, friends]}
+        - name: unread
+          in: query
+          schema: {type: boolean}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: A page of notifications.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/NotificationPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /notifications/unread-count:
+    get:
+      tags: [Notifications]
+      operationId: getUnreadNotificationCount
+      summary: "[NEW] Number of unread notifications (tab badge)"
+      description: |
+        **Authentication:** required. Lightweight request for the bottom-navigation badge. Poll every 30-60 seconds
+        while the app is in the foreground. It is a separate endpoint (not part of the list `meta`) because the badge
+        needs the total, not the size of one page.
+      responses:
+        '200':
+          description: The unread count.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UnreadCountEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /notifications/read:
+    post:
+      tags: [Notifications]
+      operationId: markAllNotificationsRead
+      summary: Mark every notification as read
+      description: |
+        **Authentication:** required. Idempotent. Matches the app's current behaviour where opening the Notifications
+        tab marks everything read.
+      responses:
+        '204': {description: All notifications are read.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /notifications/{notification}/read:
+    post:
+      tags: [Notifications]
+      operationId: markNotificationRead
+      summary: Mark one notification as read
+      description: |
+        **Authentication:** required. **Authorization:** the recipient only; someone else's notification is `404`.
+        Idempotent.
+      parameters:
+        - {$ref: '#/components/parameters/NotificationId'}
+      responses:
+        '204': {description: The notification is read.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Sanctum personal access token from `register` or `login`.
+
+  headers:
+    RetryAfter:
+      description: Seconds to wait before retrying.
+      schema: {type: integer, minimum: 1}
+
+  parameters:
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque cursor from the previous page's `meta.nextCursor`. Omit for the first page.
+      schema: {type: string, maxLength: 512}
+    Limit:
+      name: limit
+      in: query
+      description: Page size.
+      schema: {type: integer, minimum: 1, maximum: 50, default: 20}
+    MessageLimit:
+      name: limit
+      in: query
+      description: Page size for messages.
+      schema: {type: integer, minimum: 1, maximum: 100, default: 30}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Client-generated UUID. Repeating the same request with the same key within 24 hours returns the original response.
+      schema: {type: string, format: uuid}
+    UserId:
+      name: user
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Id'}
+    PostId:
+      name: post
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Id'}
+    CommentId:
+      name: comment
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Id'}
+    StoryId:
+      name: story
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Id'}
+    ConversationId:
+      name: conversation
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Id'}
+    NotificationId:
+      name: notification
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Id'}
+    FriendRequestId:
+      name: friendRequest
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Id'}
+
+  responses:
+    BadRequest:
+      description: Malformed request, or a cursor that does not match this endpoint or its filters.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {message: The cursor is not valid for this request., code: invalid_cursor}
+    Unauthenticated:
+      description: Missing, invalid, expired or revoked token. The client deletes its stored token and shows the login screen.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {message: Unauthenticated., code: unauthenticated}
+    Forbidden:
+      description: The resource is visible to the caller but the action is not allowed.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {message: This action is unauthorized., code: forbidden}
+    NotFound:
+      description: The resource does not exist, or the caller is not allowed to know it exists.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {message: Not found., code: not_found}
+    Conflict:
+      description: The request is valid but conflicts with the current state (or reuses an Idempotency-Key with a different body).
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {message: A friend request already exists., code: friend_request_exists}
+    PayloadTooLarge:
+      description: The uploaded file is larger than the server accepts.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {message: The uploaded file is too large., code: payload_too_large}
+    ValidationFailed:
+      description: Validation failed. `errors` maps each field to its messages.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ValidationError'}
+          example: {message: Validation failed., code: validation_failed, errors: {content: [The content field is required.]}}
+    TooManyRequests:
+      description: Rate limit exceeded.
+      headers:
+        Retry-After: {$ref: '#/components/headers/RetryAfter'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {message: Too many requests., code: too_many_requests}
+    ServerError:
+      description: Unexpected error. The body never contains exception details in production.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {message: Server error., code: server_error}
+
+  schemas:
+    # ------------------------------------------------------------------ basics
+    Id:
+      type: string
+      description: 26-character lowercase ULID. Opaque to clients.
+      minLength: 26
+      maxLength: 26
+      pattern: '^[0-9a-hjkmnp-tv-z]{26}$'
+      example: 01j8z6t4q9v3x7y2n5m1k8r0pd
+    Timestamp:
+      type: string
+      format: date-time
+      description: RFC 3339, UTC, second precision.
+      example: '2026-09-30T08:15:00Z'
+    Error:
+      type: object
+      required: [message, code]
+      properties:
+        message: {type: string, description: English developer text. Not for display.}
+        code: {type: string, description: Stable machine-readable code.}
+    ValidationError:
+      allOf:
+        - $ref: '#/components/schemas/Error'
+        - type: object
+          required: [errors]
+          properties:
+            errors:
+              type: object
+              description: Field name to list of messages. Multipart/JSON field names as sent.
+              additionalProperties:
+                type: array
+                items: {type: string}
+    CursorMeta:
+      type: object
+      required: [nextCursor, hasMore]
+      properties:
+        nextCursor:
+          type: [string, 'null']
+          description: Pass as `cursor` to get the next page. `null` when `hasMore` is false.
+        hasMore: {type: boolean}
+
+    # ------------------------------------------------------------------- enums
+    Privacy:
+      type: string
+      enum: [public, friends, only_me]
+      description: 'Flutter `Post.privacy` (was the Vietnamese label). Labels: Công khai / Bạn bè / Chỉ mình tôi.'
+    Feeling:
+      type: string
+      enum: [cheerful, excited, happy]
+      description: |
+        The three feelings that exist in `CreatePostScreen` today (no new ones): `cheerful` = "Cảm thấy vui",
+        `excited` = "Hứng thú", `happy` = "Hạnh phúc".
+    StoryBackground:
+      type: string
+      enum: [indigo, sunset, mint, berry]
+      description: The four background presets of `StoryCreatorScreen`, by index 0-3. Replaces `Story.gradientColors`.
+    NotificationType:
+      type: string
+      enum: [like, comment, share, friend_request, friend_accepted, follow]
+      description: '`friend_request` was `friend` in the mock data. `friend_accepted` and `follow` are new.'
+    FriendshipStatus:
+      type: string
+      enum: [none, pending_outgoing, pending_incoming, friends, self]
+      description: |
+        Relationship of the caller to a user. Replaces the Friends screen's private `_FriendStatus {add, pending, friends}`:
+        `none` = Thêm bạn, `pending_outgoing` = Đang chờ, `friends` = Bạn bè; `pending_incoming` and `self` are new.
+    OtherFriendshipStatus:
+      type: string
+      enum: [none, pending_outgoing, pending_incoming, friends]
+    Friendship:
+      type: object
+      required: [status, requestId]
+      properties:
+        status: {$ref: '#/components/schemas/FriendshipStatus'}
+        requestId:
+          anyOf:
+            - $ref: '#/components/schemas/Id'
+            - type: 'null'
+          description: Id of the pending request when status is `pending_outgoing` or `pending_incoming`, otherwise `null`.
+
+    # ------------------------------------------------------------------- users
+    UserSummary:
+      type: object
+      description: The small user object embedded in posts, comments, stories, messages and notifications.
+      x-flutter-source: UserModel (lib/models/user.dart)
+      x-backend-entity: users
+      x-not-exposed:
+        - "coverUrl (seed only, no UI)"
+        - "accentColor (UI only)"
+        - "isFriend (replaced by friendship)"
+        - "mutualFriends (moved to UserListItem / UserProfile)"
+      required: [id, name, username, avatarUrl]
+      properties:
+        id: {$ref: '#/components/schemas/Id'}
+        name: {type: string, minLength: 2, maxLength: 50}
+        username:
+          type: string
+          pattern: '^[a-z0-9_]{3,30}$'
+          description: Without the leading `@` (the mock data stores `@minh_anh`; Flutter adds the `@` when displaying).
+        avatarUrl:
+          type: [string, 'null']
+          format: uri
+          description: '`null` when the user has no avatar; Flutter shows its person-icon fallback.'
+    UserListItem:
+      description: A user in search results, with the caller's relationship to them.
+      x-flutter-source: UserModel as used by FriendsScreen
+      x-backend-entity: users + friendships
+      allOf:
+        - $ref: '#/components/schemas/UserSummary'
+        - type: object
+          required: [mutualFriendsCount, friendship, isFollowing, isOnline, lastSeenAt]
+          properties:
+            isFollowing: {type: boolean}
+            isOnline: {$ref: '#/components/schemas/IsOnline'}
+            lastSeenAt: {$ref: '#/components/schemas/LastSeenAt'}
+            mutualFriendsCount:
+              type: integer
+              minimum: 0
+              x-computed: friends the caller and this user have in common
+            friendship: {$ref: '#/components/schemas/Friendship'}
+    UserProfile:
+      description: A full public profile.
+      x-flutter-source: UserModel as used by ProfileScreen
+      x-backend-entity: users + friendships
+      allOf:
+        - $ref: '#/components/schemas/UserSummary'
+        - type: object
+          required: [bio, coverUrl, about, createdAt, friendsCount, followersCount, followingCount, isFollowing, followsYou, isOnline, lastSeenAt, mutualFriendsCount, friendship, isBlocked]
+          properties:
+            followersCount: {type: integer, minimum: 0}
+            followingCount: {type: integer, minimum: 0}
+            isFollowing: {type: boolean, x-computed: the caller follows this user}
+            followsYou: {type: boolean, x-computed: this user follows the caller}
+            isOnline: {$ref: '#/components/schemas/IsOnline'}
+            lastSeenAt: {$ref: '#/components/schemas/LastSeenAt'}
+            coverUrl: {type: [string, 'null'], format: uri, description: 'The profile header image.'}
+            about: {$ref: '#/components/schemas/About'}
+            createdAt: {$ref: '#/components/schemas/Timestamp'}
+            isBlocked: {type: boolean, x-computed: 'a row in user_blocks from the caller to this user'}
+            bio: {type: [string, 'null'], maxLength: 300, description: '`null` when empty (Flutter shows an empty bio).'}
+            friendsCount:
+              type: integer
+              minimum: 0
+              x-computed: accepted friendships of this user
+              description: The number ProfileScreen shows as "N bạn bè". (The mock model reused `mutualFriends` for this.)
+            mutualFriendsCount:
+              type: [integer, 'null']
+              minimum: 0
+              x-computed: '`null` when the profile is the caller''s own'
+            friendship: {$ref: '#/components/schemas/Friendship'}
+    Me:
+      description: The authenticated user's own account, including private fields.
+      x-flutter-source: currentUser / UserModel
+      x-backend-entity: users
+      allOf:
+        - $ref: '#/components/schemas/UserSummary'
+        - type: object
+          required: [email, emailVerified, bio, coverUrl, about, showOnlineStatus, friendsCount, followersCount, followingCount, createdAt]
+          properties:
+            showOnlineStatus: {type: boolean}
+            followersCount: {type: integer, minimum: 0}
+            followingCount: {type: integer, minimum: 0}
+            coverUrl: {type: [string, 'null'], format: uri}
+            about: {$ref: '#/components/schemas/About'}
+            email: {type: string, format: email}
+            emailVerified: {type: boolean, x-computed: email_verified_at is not null}
+            bio: {type: [string, 'null'], maxLength: 300}
+            friendsCount: {type: integer, minimum: 0, x-computed: accepted friendships}
+            createdAt: {$ref: '#/components/schemas/Timestamp'}
+    AuthToken:
+      type: object
+      required: [accessToken, tokenType, expiresAt]
+      properties:
+        accessToken: {type: string, description: Plain-text Sanctum token. Shown only in this response.}
+        tokenType: {type: string, const: Bearer}
+        expiresAt: {$ref: '#/components/schemas/Timestamp'}
+    AuthResult:
+      type: object
+      required: [user, token]
+      properties:
+        user: {$ref: '#/components/schemas/Me'}
+        token: {$ref: '#/components/schemas/AuthToken'}
+    RegisterRequest:
+      type: object
+      required: [name, username, email, password]
+      properties:
+        name: {type: string, minLength: 2, maxLength: 50}
+        username: {type: string, pattern: '^[a-z0-9_]{3,30}$'}
+        email: {type: string, format: email, maxLength: 255}
+        password: {type: string, format: password, minLength: 8, maxLength: 72}
+        deviceName: {type: string, maxLength: 60}
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: {type: string, format: email}
+        password: {type: string, format: password}
+        deviceName: {type: string, maxLength: 60}
+    CodeRequest:
+      type: object
+      required: [code]
+      properties:
+        code: {type: string, pattern: '^[0-9]{6}$'}
+    ForgotPasswordRequest:
+      type: object
+      required: [email]
+      properties:
+        email: {type: string, format: email}
+    ResetPasswordRequest:
+      type: object
+      required: [email, code, password]
+      properties:
+        email: {type: string, format: email}
+        code: {type: string, pattern: '^[0-9]{6}$'}
+        password: {type: string, format: password, minLength: 8, maxLength: 72}
+    DeviceRequest:
+      type: object
+      required: [token, platform]
+      properties:
+        token: {type: string, maxLength: 512, description: "FCM registration token"}
+        platform: {type: string, enum: [ios, android]}
+      additionalProperties: false
+
+    DeleteAccountRequest:
+      type: object
+      required: [password]
+      properties:
+        password: {type: string, format: password}
+    UpdateMeRequest:
+      type: object
+      description: Send only the fields to change. A blank text or `null` clears a field.
+      properties:
+        name: {type: string, minLength: 2, maxLength: 50}
+        bio: {type: [string, 'null'], maxLength: 300}
+        showOnlineStatus: {type: boolean, description: 'Let friends see when you are online and when you were last active. Default true.'}
+        location: {type: [string, 'null'], maxLength: 100}
+        hometown: {type: [string, 'null'], maxLength: 100}
+        workplace: {type: [string, 'null'], maxLength: 100}
+        education: {type: [string, 'null'], maxLength: 100}
+        website: {type: [string, 'null'], maxLength: 200, description: 'An http:// or https:// address.'}
+        birthday: {type: [string, 'null'], format: date, description: 'YYYY-MM-DD, after 1900-01-01 and before today.'}
+    IsOnline:
+      type: boolean
+      description: |
+        True when the user was active in the last 2 minutes. Only friends see it, and only when the user has not turned
+        "show online status" off; otherwise it is `false` (the same as offline, so it does not reveal the setting).
+    LastSeenAt:
+      anyOf:
+        - $ref: '#/components/schemas/Timestamp'
+        - type: 'null'
+      description: When the user was last active. `null` when it is hidden (same rule as `isOnline`) or unknown.
+    About:
+      type: object
+      description: The "About" tab. Every field can be `null`.
+      required: [location, hometown, workplace, education, website, birthday]
+      properties:
+        location: {type: [string, 'null'], maxLength: 100}
+        hometown: {type: [string, 'null'], maxLength: 100}
+        workplace: {type: [string, 'null'], maxLength: 100}
+        education: {type: [string, 'null'], maxLength: 100}
+        website: {type: [string, 'null'], maxLength: 200}
+        birthday: {type: [string, 'null'], format: date}
+    Photo:
+      type: object
+      required: [postId, imageUrl, createdAt]
+      properties:
+        postId: {$ref: '#/components/schemas/Id'}
+        imageUrl: {type: string, format: uri}
+        createdAt: {$ref: '#/components/schemas/Timestamp'}
+    PhotoPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data: {type: array, items: {$ref: '#/components/schemas/Photo'}}
+        meta: {$ref: '#/components/schemas/CursorMeta'}
+    AvatarUploadRequest:
+      type: object
+      required: [avatar]
+      properties:
+        avatar: {type: string, format: binary, description: 'image/jpeg, image/png or image/webp, max 10 MB.'}
+    FriendRequestCreate:
+      type: object
+      required: [userId]
+      properties:
+        userId: {$ref: '#/components/schemas/Id'}
+    FriendRequest:
+      type: object
+      x-flutter-source: none (new; the mock app had no friend-request model)
+      x-backend-entity: friendships (status = pending)
+      required: [id, sender, receiver, createdAt]
+      properties:
+        id: {$ref: '#/components/schemas/Id'}
+        sender: {$ref: '#/components/schemas/UserSummary'}
+        receiver: {$ref: '#/components/schemas/UserSummary'}
+        createdAt: {$ref: '#/components/schemas/Timestamp'}
+
+    # ------------------------------------------------------------------- posts
+    Post:
+      type: object
+      x-flutter-source: Post (lib/models/post.dart)
+      x-backend-entity: posts
+      x-not-exposed:
+        - "imageId (mock image identity; replaced by the uploaded image)"
+      required: [id, author, content, imageUrl, imageUrls, feeling, privacy, createdAt, likes, comments, shares, isLiked, isSaved, isHidden]
+      properties:
+        id: {$ref: '#/components/schemas/Id'}
+        author: {$ref: '#/components/schemas/UserSummary'}
+        content: {type: string, maxLength: 5000, description: 'Empty string for image-only posts, never `null`.'}
+        imageUrl: {type: [string, 'null'], format: uri, description: 'The first image, or `null`. Kept for older clients; use `imageUrls`.'}
+        imageUrls:
+          type: array
+          maxItems: 10
+          items: {type: string, format: uri}
+          description: 'All images in display order (empty when there is none).'
+        feeling:
+          anyOf:
+            - $ref: '#/components/schemas/Feeling'
+            - type: 'null'
+        privacy: {$ref: '#/components/schemas/Privacy'}
+        createdAt: {$ref: '#/components/schemas/Timestamp'}
+        likes: {type: integer, minimum: 0}
+        comments: {type: integer, minimum: 0}
+        shares: {type: integer, minimum: 0}
+        isLiked: {type: boolean, x-computed: the caller has a like on this post}
+        isSaved: {type: boolean, x-computed: the caller saved this post}
+        isHidden: {type: boolean, x-computed: the caller hid this post from their feed}
+      example:
+        id: 01j8z6t4q9v3x7y2n5m1k8r0pd
+        author: {id: 01j8z5r2c4h7w9e1b3a6d8f0gt, name: Minh Ánh, username: minh_anh, avatarUrl: 'https://cdn.socialhub.example/avatars/2026/09/01j8z5x.jpg'}
+        content: Ngày đẹp trời, ngồi ở quán cà phê.
+        imageUrl: 'https://cdn.socialhub.example/posts/2026/09/01j8z6t.jpg'
+        feeling: excited
+        privacy: public
+        createdAt: '2026-09-30T08:15:00Z'
+        likes: 254
+        comments: 38
+        shares: 12
+        isLiked: true
+        isSaved: false
+        isHidden: false
+    CreatePostRequest:
+      type: object
+      properties:
+        content: {type: string, maxLength: 5000}
+        image: {type: string, format: binary, description: 'One image (kept for older clients); same as `images` with a single file. image/jpeg, image/png or image/webp, max 10 MB.'}
+        images:
+          type: array
+          maxItems: 10
+          items: {type: string, format: binary}
+          description: 'Up to 10 images, each image/jpeg, image/png or image/webp, max 10 MB.'
+        feeling:
+          anyOf:
+            - $ref: '#/components/schemas/Feeling'
+            - type: 'null'
+        privacy: {$ref: '#/components/schemas/Privacy'}
+    CreatePostJsonRequest:
+      type: object
+      properties:
+        content: {type: string, maxLength: 5000}
+        feeling:
+          anyOf:
+            - $ref: '#/components/schemas/Feeling'
+            - type: 'null'
+        privacy: {$ref: '#/components/schemas/Privacy'}
+    LikeState:
+      type: object
+      required: [isLiked, likes]
+      properties:
+        isLiked: {type: boolean}
+        likes: {type: integer, minimum: 0}
+    SaveState:
+      type: object
+      required: [isSaved]
+      properties:
+        isSaved: {type: boolean}
+    HideState:
+      type: object
+      required: [isHidden]
+      properties:
+        isHidden: {type: boolean}
+    ShareRequest:
+      type: object
+      properties:
+        target:
+          type: string
+          enum: [link, message]
+          default: link
+          description: Which share-sheet action was used ("Sao chép liên kết" / "Gửi trong tin nhắn"). Statistics only.
+    ShareState:
+      type: object
+      required: [shares]
+      properties:
+        shares: {type: integer, minimum: 0}
+
+    # ---------------------------------------------------------------- comments
+    Comment:
+      type: object
+      x-flutter-source: none (new; the mock app only had a comment count and a text field)
+      x-backend-entity: comments
+      required: [id, postId, author, content, createdAt]
+      properties:
+        id: {$ref: '#/components/schemas/Id'}
+        postId: {$ref: '#/components/schemas/Id'}
+        author: {$ref: '#/components/schemas/UserSummary'}
+        content: {type: string, minLength: 1, maxLength: 1000}
+        createdAt: {$ref: '#/components/schemas/Timestamp'}
+    CreateCommentRequest:
+      type: object
+      required: [content]
+      properties:
+        content: {type: string, minLength: 1, maxLength: 1000}
+
+    # ----------------------------------------------------------------- stories
+    Story:
+      type: object
+      x-flutter-source: Story (lib/models/story.dart)
+      x-backend-entity: stories
+      x-not-exposed:
+        - "gradientColors (replaced by `background`; Flutter maps it to colors)"
+      required: [id, author, text, imageUrl, background, createdAt, expiresAt, isViewed]
+      properties:
+        id: {$ref: '#/components/schemas/Id'}
+        author: {$ref: '#/components/schemas/UserSummary'}
+        text: {type: [string, 'null'], maxLength: 500}
+        imageUrl: {type: [string, 'null'], format: uri}
+        background: {$ref: '#/components/schemas/StoryBackground'}
+        createdAt: {$ref: '#/components/schemas/Timestamp'}
+        expiresAt: {$ref: '#/components/schemas/Timestamp'}
+        isViewed: {type: boolean, x-computed: the caller has viewed this story (always false for the caller's own)}
+    CreateStoryRequest:
+      type: object
+      properties:
+        text: {type: string, maxLength: 500}
+        background: {$ref: '#/components/schemas/StoryBackground'}
+        image: {type: string, format: binary, description: 'image/jpeg, image/png or image/webp, max 10 MB.'}
+    CreateStoryJsonRequest:
+      type: object
+      properties:
+        text: {type: string, maxLength: 500}
+        background: {$ref: '#/components/schemas/StoryBackground'}
+
+    # ------------------------------------------------------------ conversations
+    Message:
+      type: object
+      x-flutter-source: ChatMessage (lib/models/message.dart)
+      x-backend-entity: messages
+      x-not-exposed:
+        - "isMine (Flutter computes senderId == currentUser.id)"
+        - "time (replaced by createdAt)"
+      required: [id, conversationId, senderId, text, attachments, createdAt]
+      properties:
+        id: {$ref: '#/components/schemas/Id'}
+        conversationId: {$ref: '#/components/schemas/Id'}
+        senderId: {$ref: '#/components/schemas/Id'}
+        text: {type: string, maxLength: 2000, description: 'Empty (`""`) for a message that only has attachments.'}
+        attachments:
+          type: array
+          maxItems: 5
+          items: {$ref: '#/components/schemas/Attachment'}
+        createdAt: {$ref: '#/components/schemas/Timestamp'}
+    Conversation:
+      type: object
+      x-flutter-source: Conversation (lib/models/message.dart)
+      x-backend-entity: conversations + conversation_participants + messages
+      x-not-exposed:
+        - "messages (loaded separately and paged)"
+        - "time (replaced by updatedAt / lastMessage.createdAt)"
+      required: [id, participant, lastMessage, unreadCount, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/Id'}
+        participant:
+          allOf:
+            - $ref: '#/components/schemas/UserSummary'
+            - type: object
+              required: [isOnline, lastSeenAt]
+              properties:
+                isOnline: {$ref: '#/components/schemas/IsOnline'}
+                lastSeenAt: {$ref: '#/components/schemas/LastSeenAt'}
+        lastMessage:
+          anyOf:
+            - $ref: '#/components/schemas/Message'
+            - type: 'null'
+        unreadCount:
+          type: integer
+          minimum: 0
+          x-computed: messages from the other participant after the caller's read marker
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
+    CreateConversationRequest:
+      type: object
+      required: [userId]
+      properties:
+        userId: {$ref: '#/components/schemas/Id'}
+    CreateMessageRequest:
+      type: object
+      required: [text]
+      properties:
+        text: {type: string, minLength: 1, maxLength: 2000}
+    CreateMessageMultipartRequest:
+      type: object
+      properties:
+        text: {type: string, maxLength: 2000}
+        attachments:
+          type: array
+          maxItems: 5
+          items: {type: string, format: binary}
+    Attachment:
+      type: object
+      required: [id, type, url, name, mimeType, sizeBytes, width, height]
+      properties:
+        id: {type: integer}
+        type: {type: string, enum: [image, file]}
+        url: {type: string, format: uri, description: 'Publicly readable address of the stored file.'}
+        name: {type: string, maxLength: 255, description: 'The file name the sender had (for display and download).'}
+        mimeType: {type: string}
+        sizeBytes: {type: integer, minimum: 0}
+        width: {type: [integer, 'null'], description: 'Images only.'}
+        height: {type: [integer, 'null'], description: 'Images only.'}
+    MarkReadRequest:
+      type: object
+      properties:
+        upToMessageId:
+          anyOf:
+            - $ref: '#/components/schemas/Id'
+            - type: 'null'
+
+    # ----------------------------------------------------------- notifications
+    Notification:
+      type: object
+      x-flutter-source: SocialNotification (lib/models/notification.dart)
+      x-backend-entity: notifications
+      x-not-exposed:
+        - "description (Vietnamese text, composed by Flutter from `type`)"
+        - "icon and iconColor (UI only, chosen by `type`)"
+        - "time (replaced by createdAt)"
+      required: [id, type, actor, isRead, createdAt, postId, commentId, friendRequestId, relatedContent]
+      properties:
+        id: {$ref: '#/components/schemas/Id'}
+        type: {$ref: '#/components/schemas/NotificationType'}
+        actor: {$ref: '#/components/schemas/UserSummary'}
+        isRead: {type: boolean, x-computed: readAt is not null}
+        createdAt: {$ref: '#/components/schemas/Timestamp'}
+        postId:
+          anyOf:
+            - $ref: '#/components/schemas/Id'
+            - type: 'null'
+          description: Set for `like`, `comment` and `share`.
+        commentId:
+          anyOf:
+            - $ref: '#/components/schemas/Id'
+            - type: 'null'
+          description: Set for `comment`.
+        friendRequestId:
+          anyOf:
+            - $ref: '#/components/schemas/Id'
+            - type: 'null'
+          description: Set for `friend_request` while it is pending, else `null`.
+        relatedContent:
+          type: [string, 'null']
+          maxLength: 100
+          x-computed: first 100 characters of the comment (type comment) or the post (like and share), read at request time
+      example:
+        id: 01j8z7a9k2m4n6p8q0r2s4t6vw
+        type: like
+        actor: {id: 01j8z5r2c4h7w9e1b3a6d8f0gt, name: Minh Ánh, username: minh_anh, avatarUrl: null}
+        isRead: false
+        createdAt: '2026-09-30T08:20:00Z'
+        postId: 01j8z6t4q9v3x7y2n5m1k8r0pd
+        commentId: null
+        friendRequestId: null
+        relatedContent: Ngày đẹp trời, ngồi ở quán cà phê.
+    UnreadCount:
+      type: object
+      required: [count]
+      properties:
+        count: {type: integer, minimum: 0}
+
+    # --------------------------------------------------------------- envelopes
+    AuthResultEnvelope: {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/AuthResult'}}}
+    MeEnvelope: {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/Me'}}}
+    UserProfileEnvelope: {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/UserProfile'}}}
+    UserPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data: {type: array, items: {$ref: '#/components/schemas/UserListItem'}}
+        meta: {$ref: '#/components/schemas/CursorMeta'}
+    FriendRequestEnvelope: {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/FriendRequest'}}}
+    BlockedUserPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data: {type: array, items: {$ref: '#/components/schemas/UserSummary'}}
+        meta: {$ref: '#/components/schemas/CursorMeta'}
+    CreateReportRequest:
+      type: object
+      required: [targetType, targetId, reason]
+      properties:
+        targetType: {type: string, enum: [post, comment, user]}
+        targetId: {$ref: '#/components/schemas/Id'}
+        reason:
+          type: string
+          enum: [spam, harassment, hate, violence, nudity, false_info, other]
+          description: 'Spam, harassment or bullying, hate speech, violence, nudity or sexual content, false information, something else.'
+        details: {type: [string, 'null'], maxLength: 500}
+    Report:
+      type: object
+      required: [id, targetType, targetId, reason, createdAt]
+      properties:
+        id: {$ref: '#/components/schemas/Id'}
+        targetType: {type: string, enum: [post, comment, user]}
+        targetId: {$ref: '#/components/schemas/Id'}
+        reason: {type: string}
+        createdAt: {$ref: '#/components/schemas/Timestamp'}
+    ReportEnvelope: {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/Report'}}}
+    FriendRequestPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data: {type: array, items: {$ref: '#/components/schemas/FriendRequest'}}
+        meta: {$ref: '#/components/schemas/CursorMeta'}
+    PostEnvelope: {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/Post'}}}
+    PostPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data: {type: array, items: {$ref: '#/components/schemas/Post'}}
+        meta: {$ref: '#/components/schemas/CursorMeta'}
+    LikeStateEnvelope: {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/LikeState'}}}
+    SaveStateEnvelope: {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/SaveState'}}}
+    HideStateEnvelope: {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/HideState'}}}
+    ShareStateEnvelope: {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/ShareState'}}}
+    CommentPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data: {type: array, items: {$ref: '#/components/schemas/Comment'}}
+        meta: {$ref: '#/components/schemas/CursorMeta'}
+    CommentCreatedEnvelope:
+      type: object
+      required: [data, meta]
+      properties:
+        data: {$ref: '#/components/schemas/Comment'}
+        meta:
+          type: object
+          required: [commentsCount]
+          properties:
+            commentsCount: {type: integer, minimum: 0, description: The post's comment count after this comment.}
+    StoryEnvelope: {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/Story'}}}
+    StoryPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data: {type: array, items: {$ref: '#/components/schemas/Story'}}
+        meta: {$ref: '#/components/schemas/CursorMeta'}
+    ConversationEnvelope: {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/Conversation'}}}
+    ConversationPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data: {type: array, items: {$ref: '#/components/schemas/Conversation'}}
+        meta: {$ref: '#/components/schemas/CursorMeta'}
+    MessageEnvelope: {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/Message'}}}
+    MessagePage:
+      type: object
+      required: [data, meta]
+      properties:
+        data: {type: array, items: {$ref: '#/components/schemas/Message'}}
+        meta:
+          allOf:
+            - $ref: '#/components/schemas/CursorMeta'
+            - type: object
+              required: [otherTyping]
+              properties:
+                otherTyping: {type: boolean}
+    NotificationPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data: {type: array, items: {$ref: '#/components/schemas/Notification'}}
+        meta: {$ref: '#/components/schemas/CursorMeta'}
+    UnreadCountEnvelope: {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/UnreadCount'}}}
+
+
+# ===========================================================================
+# Database proposal (MariaDB 10.1.38, the version in this machine's local
+# XAMPP install). Not part of the HTTP contract; it documents the schema the
+# API above is designed against so that both stay in step.
+# ===========================================================================
+x-database:
+  engine: "MariaDB 10.1.38 (InnoDB; bundled with the project's local XAMPP install). This is an old, unsupported release (MariaDB 10.1 reached end-of-life in October 2020); it is accepted here only because it is what the development machine already has, and three real limitations follow from it (see conventions below). Moving to a maintained MariaDB (10.6+ LTS) or MySQL 8 later only requires reverting these three notes, not a schema redesign."
+  charset: "utf8mb4, collation utf8mb4_unicode_ci. MariaDB has no `utf8mb4_0900_ai_ci` (that collation is MySQL-8-only); `utf8mb4_unicode_ci` folds most accents at the primary sorting level (`minh` still matches `Mình`), but is not guaranteed for every stacked Vietnamese diacritic (e.g. `ệ`), so verify the specific search cases the app relies on once the real data is in."
+  conventions:
+    - "Primary keys are `char(26)` lowercase ULIDs generated by the application (Eloquent `HasUlids`). Exceptions: pure link tables use a composite primary key; `personal_access_tokens`, `idempotency_keys` and the queue tables keep their own key."
+    - "Because users use ULIDs, Sanctum's migration must use `ulidMorphs('tokenable')` (the default `morphs()` would create a bigint column)."
+    - "Enum-like columns (`privacy`, `feeling`, `background`, `status`, `type`) are `varchar` validated by PHP backed enums, not MySQL/MariaDB ENUM, so adding a value needs no ALTER TABLE."
+    - "Timestamps are UTC `timestamp` columns (Laravel default); the API prints them as RFC 3339 with `Z`."
+    - "Every foreign key is declared. Cascade rules are listed per table."
+    - "Soft deletes only on `users`, `posts`, `comments` (moderation and undo). Every list query must exclude soft-deleted rows."
+    - "Counters (`likes_count`, `comments_count`, `shares_count`) are denormalized for cheap reads and are updated in the same transaction as the row that causes the change."
+    - "Files live on a Laravel disk (`local`/`public` in development, S3-compatible in production); tables store only relative paths (`*_path`). The API turns a path into an absolute URL."
+    - "MariaDB 10.1 limitation 1 — long utf8mb4 unique indexes: InnoDB's default key-prefix limit is 767 bytes, and `varchar(255)` in utf8mb4 needs up to 1020. 10.1 can go past that, but only with `innodb_large_prefix=1`, `innodb_file_format=Barracuda` (both in `my.cnf`) and `ROW_FORMAT=DYNAMIC` on the affected tables. The migrations for `users` (email/username) and `conversations` (direct_key) must set `ROW_FORMAT=DYNAMIC` explicitly; without the two server settings the migration fails with 'Specified key was too long'."
+    - "MariaDB 10.1 limitation 2 — CHECK constraints are parsed but not enforced (enforcement starts at MariaDB 10.2.1). Every `checks:` entry below is therefore documentation only; the same rule must also be enforced in a Laravel Form Request or model validation, or bad rows can reach the database."
+    - "MariaDB 10.1 limitation 3 — no native JSON type (it exists as a `LONGTEXT` alias with no validation). `idempotency_keys.response_body` is declared `text` here, not `json`, and the app must `json_encode`/`json_decode` it itself; Eloquent's automatic JSON casting still works against a text column."
+
+  tables:
+    users:
+      apiEntities: [UserSummary, UserListItem, UserProfile, Me]
+      flutterSource: UserModel
+      softDeletes: true
+      rowFormat: "DYNAMIC (needed for the utf8mb4 unique indexes below under MariaDB 10.1; see x-database.conventions)"
+      columns:
+        - {name: id, type: "char(26)", nullable: false, key: primary}
+        - {name: name, type: "varchar(50)", nullable: false}
+        - {name: username, type: "varchar(30)", nullable: false, note: "stored without '@'"}
+        - {name: email, type: "varchar(255)", nullable: false}
+        - {name: email_verified_at, type: timestamp, nullable: true, note: "set when the emailed code is confirmed (`POST /auth/email/verify`)"}
+        - {name: password, type: "varchar(255)", nullable: false, note: "hashed by Laravel; never returned"}
+        - {name: avatar_path, type: "varchar(255)", nullable: true}
+        - {name: bio, type: "varchar(300)", nullable: true}
+        - {name: created_at, type: timestamp, nullable: true}
+        - {name: updated_at, type: timestamp, nullable: true}
+        - {name: deleted_at, type: timestamp, nullable: true}
+      unique: ["username", "email"]
+      indexes:
+        - {columns: [name, id], note: "orders /users; `LIKE '%q%'` cannot use it, so search scans (fine for v1; move to FULLTEXT ngram if it becomes slow)"}
+      notes:
+        - "Not stored: `coverUrl`, `accentColor` (no UI), `isFriend`, `mutualFriends`, `friendsCount` (computed from friendships)."
+        - "Account deletion (soft delete, then a purge job that hard-deletes and lets the cascades run) needs a retention decision."
+
+    personal_access_tokens:
+      apiEntities: [AuthToken]
+      note: "Sanctum's table, adapted for ULID owners."
+      rowFormat: "DYNAMIC (the (tokenable_type, tokenable_id) index spans a varchar(255) utf8mb4 column, which exceeds 767 bytes under MariaDB 10.1; found when running the schema)"
+      columns:
+        - {name: id, type: "bigint unsigned", nullable: false, key: primary, note: auto-increment}
+        - {name: tokenable_type, type: "varchar(255)", nullable: false}
+        - {name: tokenable_id, type: "char(26)", nullable: false}
+        - {name: name, type: "varchar(255)", nullable: false, note: "device name from the request"}
+        - {name: token, type: "char(64)", nullable: false, note: "SHA-256 hash; the plain token is shown once"}
+        - {name: abilities, type: text, nullable: true}
+        - {name: last_used_at, type: timestamp, nullable: true}
+        - {name: expires_at, type: timestamp, nullable: true, note: "set to now + 30 days when the token is created"}
+        - {name: created_at, type: timestamp, nullable: true}
+        - {name: updated_at, type: timestamp, nullable: true}
+      unique: ["token"]
+      indexes:
+        - {columns: [tokenable_type, tokenable_id]}
+        - {columns: [expires_at], note: "for `sanctum:prune-expired`"}
+      notes:
+        - "No foreign key is possible on a polymorphic column, so deleting a user must delete their tokens explicitly (a `deleting` hook or the purge job)."
+
+    friendships:
+      apiEntities: [Friendship, FriendRequest]
+      flutterSource: "none (the mock app only had UserModel.isFriend and a local _FriendStatus enum)"
+      columns:
+        - {name: id, type: "char(26)", nullable: false, key: primary, note: "this is the `friendRequestId` while status is pending"}
+        - {name: requester_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: addressee_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: user_low_id, type: "char(26)", nullable: false, note: "min(requester_id, addressee_id), set by the app (Friendship::creating). Not a generated column: MariaDB 10.2+ rejects LEAST() on strings there (error 1901)"}
+        - {name: user_high_id, type: "char(26)", nullable: false, note: "max(requester_id, addressee_id), set by the app"}
+        - {name: status, type: "varchar(10)", nullable: false, note: "pending | accepted"}
+        - {name: accepted_at, type: timestamp, nullable: true}
+        - {name: created_at, type: timestamp, nullable: true}
+        - {name: updated_at, type: timestamp, nullable: true}
+      unique:
+        - "(user_low_id, user_high_id): exactly one row per pair of users whichever way the request went. This makes A-to-B and B-to-A sent at the same moment impossible: the second INSERT fails with error 1062."
+      checks:
+        - "requester_id <> addressee_id (not enforced by MariaDB 10.1 — also validate in the service that creates a friend request)"
+      indexes:
+        - {columns: [addressee_id, status, created_at], note: "incoming requests"}
+        - {columns: [requester_id, status, created_at], note: "outgoing requests"}
+        - {columns: [user_low_id, status], note: "friend lookup (one side)"}
+        - {columns: [user_high_id, status], note: "friend lookup (other side)"}
+      notes:
+        - "Cancel, decline and unfriend all delete the row (no `declined` state in v1; a declined user can be asked again, so there is no anti-harassment protection yet)."
+        - "Send: INSERT; on duplicate key read the row and answer 409 `already_friends` or `friend_request_exists`."
+        - "Accept: `UPDATE ... SET status='accepted' WHERE id=? AND addressee_id=? AND status='pending'`; 0 rows means either already accepted (return success) or not allowed (404)."
+
+    posts:
+      apiEntities: [Post]
+      flutterSource: Post
+      softDeletes: true
+      columns:
+        - {name: id, type: "char(26)", nullable: false, key: primary}
+        - {name: user_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: content, type: text, nullable: true, note: "API prints null as empty string"}
+        - {name: image_path, type: "varchar(255)", nullable: true}
+        - {name: feeling, type: "varchar(20)", nullable: true, note: "cheerful | excited | happy"}
+        - {name: privacy, type: "varchar(10)", nullable: false, default: public, note: "public | friends | only_me"}
+        - {name: likes_count, type: "int unsigned", nullable: false, default: 0}
+        - {name: comments_count, type: "int unsigned", nullable: false, default: 0}
+        - {name: shares_count, type: "int unsigned", nullable: false, default: 0}
+        - {name: created_at, type: timestamp, nullable: true}
+        - {name: updated_at, type: timestamp, nullable: true}
+        - {name: deleted_at, type: timestamp, nullable: true}
+      checks:
+        - "content IS NOT NULL OR image_path IS NOT NULL (not enforced by MariaDB 10.1; blank-after-trim content is rejected by validation anyway, which is where this must actually be checked)"
+      indexes:
+        - {columns: [user_id, created_at, id], note: "profile posts and the friends part of the feed"}
+        - {columns: [privacy, created_at, id], note: "Explore `for_you` and the 7-day window of `trending`"}
+      notes:
+        - "Not stored: `imageId` (mock only), `isLiked`, `isSaved`, `isHidden` (per-viewer, computed from the link tables)."
+        - "The feed is built on read: posts where user_id is the caller or an accepted friend, privacy allowed, not hidden by the caller. That is fine for v1; a fan-out table would only be needed at much larger scale."
+
+    post_likes:
+      flutterSource: "Post.isLiked / Post.likes"
+      columns:
+        - {name: post_id, type: "char(26)", nullable: false, references: posts.id, onDelete: cascade}
+        - {name: user_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: created_at, type: timestamp, nullable: true}
+      primaryKey: [post_id, user_id]
+      notes:
+        - "The composite primary key IS the unique constraint on user + post. Like = `INSERT IGNORE`; increment `posts.likes_count` only if 1 row was inserted. Unlike = `DELETE`; decrement (`GREATEST(x-1, 0)`) only if 1 row was deleted. Both in one transaction, so double taps and concurrent requests cannot double count."
+        - "A nightly job may recompute the counters from the link tables to repair drift."
+
+    post_saves:
+      flutterSource: "MainScreen._savedPostIds"
+      columns:
+        - {name: post_id, type: "char(26)", nullable: false, references: posts.id, onDelete: cascade}
+        - {name: user_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: created_at, type: timestamp, nullable: true}
+      primaryKey: [post_id, user_id]
+      indexes:
+        - {columns: [user_id, created_at, post_id], note: "the saved posts list (`GET /me/saved-posts`)"}
+      notes:
+        - "Unique user + post through the primary key. Idempotent `INSERT IGNORE` / `DELETE`; no counter."
+
+    post_hidden:
+      flutterSource: "MainScreen._hiddenPostIds"
+      columns:
+        - {name: post_id, type: "char(26)", nullable: false, references: posts.id, onDelete: cascade}
+        - {name: user_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: created_at, type: timestamp, nullable: true}
+      primaryKey: [post_id, user_id]
+      notes:
+        - "Unique user + post through the primary key. The feed excludes rows with a match (`NOT EXISTS`, a primary-key lookup)."
+
+    post_shares:
+      flutterSource: "Post.shares (the mock app never changed it)"
+      columns:
+        - {name: post_id, type: "char(26)", nullable: false, references: posts.id, onDelete: cascade}
+        - {name: user_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: target, type: "varchar(10)", nullable: false, note: "link | message"}
+        - {name: created_at, type: timestamp, nullable: true}
+      primaryKey: [post_id, user_id]
+      notes:
+        - "One row per user and post, so `shares` counts distinct people. Same insert-then-increment rule as likes."
+
+    comments:
+      apiEntities: [Comment]
+      flutterSource: "none (mock app had Post.comments as a number only)"
+      softDeletes: true
+      columns:
+        - {name: id, type: "char(26)", nullable: false, key: primary}
+        - {name: post_id, type: "char(26)", nullable: false, references: posts.id, onDelete: cascade}
+        - {name: user_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: content, type: "varchar(1000)", nullable: false}
+        - {name: created_at, type: timestamp, nullable: true}
+        - {name: updated_at, type: timestamp, nullable: true}
+        - {name: deleted_at, type: timestamp, nullable: true}
+      indexes:
+        - {columns: [post_id, created_at, id], note: "comment pages of a post"}
+      notes:
+        - "Create/delete adjusts `posts.comments_count` in the same transaction."
+
+    stories:
+      apiEntities: [Story]
+      flutterSource: Story
+      columns:
+        - {name: id, type: "char(26)", nullable: false, key: primary}
+        - {name: user_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: text, type: "varchar(500)", nullable: true}
+        - {name: image_path, type: "varchar(255)", nullable: true}
+        - {name: background, type: "varchar(10)", nullable: false, default: indigo, note: "indigo | sunset | mint | berry"}
+        - {name: expires_at, type: timestamp, nullable: false, note: "created_at + 24 hours"}
+        - {name: created_at, type: timestamp, nullable: true}
+        - {name: updated_at, type: timestamp, nullable: true}
+      checks:
+        - "text IS NOT NULL OR image_path IS NOT NULL (not enforced by MariaDB 10.1; validate in the request)"
+      indexes:
+        - {columns: [user_id, created_at, id], note: "stories of the caller and friends, newest first (`expires_at > now()` is a filter)"}
+        - {columns: [expires_at], note: "scheduled purge of expired stories and their files"}
+      notes:
+        - "Not stored: `gradientColors` (UI) and `isViewed` (per-viewer, from story_views)."
+
+    story_views:
+      flutterSource: "Story.isViewed (seed only in the mock app)"
+      columns:
+        - {name: story_id, type: "char(26)", nullable: false, references: stories.id, onDelete: cascade}
+        - {name: user_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: viewed_at, type: timestamp, nullable: false}
+      primaryKey: [story_id, user_id]
+      indexes:
+        - {columns: [user_id, story_id], note: "'which of these stories have I viewed' looks up by user first"}
+      notes:
+        - "Unique story + user through the primary key; `INSERT IGNORE` makes repeated views harmless. The author's own views are not recorded."
+
+    conversations:
+      apiEntities: [Conversation]
+      flutterSource: Conversation
+      rowFormat: "DYNAMIC (needed for the direct_key unique index under MariaDB 10.1; see x-database.conventions)"
+      columns:
+        - {name: id, type: "char(26)", nullable: false, key: primary}
+        - {name: type, type: "varchar(10)", nullable: false, default: direct, note: "only 'direct' in v1"}
+        - {name: direct_key, type: "char(53)", nullable: true, note: "'{lowerUserId}:{higherUserId}' for direct conversations"}
+        - {name: last_message_id, type: "char(26)", nullable: true, references: messages.id, onDelete: "set null", note: "foreign key added in a later migration because messages references conversations"}
+        - {name: last_message_at, type: "timestamp(3)", nullable: true}
+        - {name: created_at, type: timestamp, nullable: true}
+        - {name: updated_at, type: timestamp, nullable: true}
+      unique: ["direct_key"]
+      indexes:
+        - {columns: [last_message_at, id], note: "Messages screen order"}
+      notes:
+        - "`direct_key` unique means two users can have at most one direct conversation; if both open it at once the second INSERT fails and the code reads the existing row."
+        - "API `updatedAt` = `last_message_at` or, when there is no message, `created_at`."
+
+    conversation_participants:
+      flutterSource: "Conversation.user (the other participant) and Conversation.unreadCount"
+      columns:
+        - {name: conversation_id, type: "char(26)", nullable: false, references: conversations.id, onDelete: cascade}
+        - {name: user_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: last_read_message_id, type: "char(26)", nullable: true, references: messages.id, onDelete: "set null", note: "read marker; NULL means nothing read yet"}
+        - {name: created_at, type: timestamp, nullable: true}
+      primaryKey: [conversation_id, user_id]
+      indexes:
+        - {columns: [user_id, conversation_id], note: "list my conversations"}
+      notes:
+        - "Unique conversation + user through the primary key."
+        - "Moving the marker is monotonic: `UPDATE ... SET last_read_message_id=? WHERE conversation_id=? AND user_id=? AND (last_read_message_id IS NULL OR last_read_message_id < ?)`, so a late request cannot mark messages unread again."
+        - "`unreadCount` = messages sent by the other user that are newer than the marker; computed, never stored."
+
+    messages:
+      apiEntities: [Message]
+      flutterSource: ChatMessage
+      columns:
+        - {name: id, type: "char(26)", nullable: false, key: primary}
+        - {name: conversation_id, type: "char(26)", nullable: false, references: conversations.id, onDelete: cascade}
+        - {name: sender_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: text, type: "varchar(2000)", nullable: false}
+        - {name: created_at, type: "timestamp(3)", nullable: false, note: "millisecond precision so ordering matches the ULID"}
+      indexes:
+        - {columns: [conversation_id, created_at, id], note: "history pages and polling with `after`"}
+        - {columns: [sender_id]}
+      notes:
+        - "Messages are immutable (no updated_at, no soft delete). `sender_id` cascades, so hard-deleting a user erases their messages for the other person too; decide the account-deletion policy before launch."
+        - "Sending runs in one transaction: insert the message, set `conversations.last_message_*`, and move the sender's read marker to the new message."
+
+    notifications:
+      apiEntities: [Notification]
+      flutterSource: SocialNotification
+      note: "A custom table, not Laravel's built-in `notifications` (which stores a JSON payload and cannot have foreign keys, so deleted posts would leave dangling references)."
+      columns:
+        - {name: id, type: "char(26)", nullable: false, key: primary}
+        - {name: user_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade, note: recipient}
+        - {name: actor_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: type, type: "varchar(20)", nullable: false, note: "like | comment | share | friend_request | friend_accepted"}
+        - {name: post_id, type: "char(26)", nullable: true, references: posts.id, onDelete: cascade}
+        - {name: comment_id, type: "char(26)", nullable: true, references: comments.id, onDelete: cascade}
+        - {name: friendship_id, type: "char(26)", nullable: true, references: friendships.id, onDelete: cascade}
+        - {name: dedupe_key, type: "varchar(120)", nullable: true, note: "e.g. 'like:{actorId}:{postId}'; NULL for comments"}
+        - {name: read_at, type: timestamp, nullable: true}
+        - {name: created_at, type: timestamp, nullable: true}
+      unique: ["dedupe_key"]
+      checks:
+        - "user_id <> actor_id (no self-notifications; not enforced by MariaDB 10.1 — the job that creates notifications must skip this case itself)"
+      indexes:
+        - {columns: [user_id, created_at, id], note: "the list"}
+        - {columns: [user_id, read_at], note: "unread count"}
+      notes:
+        - "Created by queued jobs (database queue driver), so they are eventually consistent."
+        - "`dedupe_key` unique stops like / unlike / like from creating several notifications; the insert uses `INSERT IGNORE`. Comments have no key, so every comment notifies."
+        - "`relatedContent` is read from the post or comment when the list is requested, not stored."
+        - "Foreign keys only fire on hard delete. Soft-deleting a post or comment must also delete its notifications (in the same job), or the list query must join and skip soft-deleted targets."
+        - "`isRead` = read_at IS NOT NULL. `friendRequestId` is friendship_id while that friendship is still pending."
+
+    idempotency_keys:
+      note: "Supporting table for the `Idempotency-Key` header. Delete rows older than 24 hours with a scheduled job."
+      columns:
+        - {name: id, type: "bigint unsigned", nullable: false, key: primary, note: auto-increment}
+        - {name: user_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: key, type: "char(36)", nullable: false}
+        - {name: method, type: "varchar(6)", nullable: false}
+        - {name: path, type: "varchar(255)", nullable: false}
+        - {name: request_hash, type: "char(64)", nullable: false, note: "SHA-256 of the request body; a different body under the same key is 409"}
+        - {name: status_code, type: "smallint unsigned", nullable: true, note: "NULL while the first request is still running"}
+        - {name: response_body, type: text, nullable: true, note: "JSON-encoded by the app; MariaDB 10.1 has no native JSON type (see x-database.conventions)"}
+        - {name: created_at, type: timestamp, nullable: false}
+      unique: ["(user_id, key)"]
+      indexes:
+        - {columns: [created_at], note: "purge"}
+      notes:
+        - "The first request inserts the row before doing the work. A concurrent duplicate hits the unique key and gets 409 while the original is still running."
+
+    device_tokens:
+      apiEntities: []
+      note: "Push (FCM) registration tokens of the users' phones."
+      columns:
+        - {name: id, type: "bigint unsigned", nullable: false, key: primary, note: auto-increment}
+        - {name: user_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: token_hash, type: "char(64)", nullable: false, note: "SHA-256 of the token; the unique index is on this because tokens are long"}
+        - {name: token, type: "varchar(512)", nullable: false}
+        - {name: platform, type: "varchar(10)", nullable: false, note: "ios | android"}
+        - {name: created_at, type: timestamp, nullable: true}
+        - {name: updated_at, type: timestamp, nullable: true}
+      unique: ["(token_hash)"]
+      notes:
+        - "A token seen again for another account is moved to that account. Tokens FCM reports as gone are deleted."
+
+    users_profile_columns:
+      apiEntities: []
+      note: "Columns added to `users` for the profile (migration add_profile_fields_to_users). Listed here because the users table above predates them."
+      columns:
+        - {name: cover_path, type: "varchar(255)", nullable: true, note: "relative path on the images disk"}
+        - {name: location, type: "varchar(100)", nullable: true}
+        - {name: hometown, type: "varchar(100)", nullable: true}
+        - {name: workplace, type: "varchar(100)", nullable: true}
+        - {name: education, type: "varchar(100)", nullable: true}
+        - {name: website, type: "varchar(200)", nullable: true}
+        - {name: birthday, type: date, nullable: true}
+        - {name: last_seen_at, type: timestamp, nullable: true, note: "refreshed by authenticated requests, at most once a minute"}
+        - {name: show_online_status, type: boolean, nullable: false, note: "default true"}
+
+    post_images:
+      apiEntities: []
+      note: "The images of a post, in display order. posts.image_path stays equal to the first one."
+      columns:
+        - {name: id, type: "bigint unsigned", nullable: false, key: primary, note: auto-increment}
+        - {name: post_id, type: "char(26)", nullable: false, references: posts.id, onDelete: cascade}
+        - {name: path, type: "varchar(255)", nullable: false}
+        - {name: position, type: "tinyint unsigned", nullable: false, note: "0-based"}
+        - {name: created_at, type: timestamp, nullable: true}
+      indexes:
+        - {columns: [post_id, position]}
+
+    message_attachments:
+      apiEntities: []
+      note: "Images and documents sent in a chat message."
+      columns:
+        - {name: id, type: "bigint unsigned", nullable: false, key: primary, note: auto-increment}
+        - {name: message_id, type: "char(26)", nullable: false, references: messages.id, onDelete: cascade}
+        - {name: type, type: "varchar(10)", nullable: false, note: "image | file"}
+        - {name: path, type: "varchar(255)", nullable: false}
+        - {name: name, type: "varchar(255)", nullable: false}
+        - {name: mime_type, type: "varchar(100)", nullable: false}
+        - {name: size_bytes, type: "int unsigned", nullable: false}
+        - {name: width, type: "smallint unsigned", nullable: true}
+        - {name: height, type: "smallint unsigned", nullable: true}
+        - {name: created_at, type: timestamp, nullable: true}
+      indexes:
+        - {columns: [message_id]}
+
+    follows:
+      apiEntities: []
+      note: "One-way follows (PUT /users/{user}/follow)."
+      columns:
+        - {name: id, type: "bigint unsigned", nullable: false, key: primary, note: auto-increment}
+        - {name: follower_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: followee_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: created_at, type: timestamp, nullable: true}
+      unique: ["(follower_id, followee_id)"]
+      indexes:
+        - {columns: [followee_id]}
+
+    user_blocks:
+      apiEntities: []
+      note: "Who blocked whom. A block hides the two people from each other (see PUT /users/{user}/block)."
+      columns:
+        - {name: id, type: "bigint unsigned", nullable: false, key: primary, note: auto-increment}
+        - {name: blocker_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: blocked_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: created_at, type: timestamp, nullable: true}
+      unique: ["(blocker_id, blocked_id)"]
+      indexes:
+        - {columns: [blocked_id], note: "is the viewer blocked by the author"}
+
+    reports:
+      apiEntities: []
+      note: "Reports of posts, comments and users, kept for the operators to review. No endpoint reads them."
+      columns:
+        - {name: id, type: "char(26)", nullable: false, key: primary, note: ULID}
+        - {name: reporter_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: target_type, type: "varchar(10)", nullable: false, note: "post | comment | user"}
+        - {name: target_id, type: "char(26)", nullable: false, note: "no foreign key: it points at one of three tables"}
+        - {name: reason, type: "varchar(20)", nullable: false}
+        - {name: details, type: "varchar(500)", nullable: true}
+        - {name: status, type: "varchar(10)", nullable: false, note: "open | closed; default open"}
+        - {name: created_at, type: timestamp, nullable: true}
+      unique: ["(reporter_id, target_type, target_id)"]
+      notes:
+        - "Enum values must also be enforced by Laravel validation (CHECK is not enforced on MariaDB 10.1)."
+
+    auth_codes:
+      apiEntities: []
+      note: "The 6-digit codes of email verification and password reset. One active code per user and purpose."
+      columns:
+        - {name: id, type: "bigint unsigned", nullable: false, key: primary, note: auto-increment}
+        - {name: user_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: purpose, type: "varchar(20)", nullable: false, note: "verify_email | reset_password"}
+        - {name: code_hash, type: "char(64)", nullable: false, note: "HMAC-SHA256 of the code with the app key; the plain code only exists in the email"}
+        - {name: attempts, type: "tinyint unsigned", nullable: false, default: 0, note: "wrong tries; at 5 the row is deleted"}
+        - {name: expires_at, type: timestamp, nullable: false, note: "created + 15 minutes"}
+        - {name: created_at, type: timestamp, nullable: true}
+      unique: ["(user_id, purpose)"]
+      notes:
+        - "Asking for a new code replaces the row (so the old code stops working and attempts start again)."
+
+    laravel_infrastructure:
+      note: "Standard Laravel tables needed by the approved setup; not part of the API."
+      tables: [jobs, job_batches, failed_jobs, migrations]
+
+  raceConditions:
+    - "like / save / hide / share: composite primary key + `INSERT IGNORE`; counters change only when a row was really inserted or deleted."
+    - "story view: primary key (story_id, user_id)."
+    - "conversation participant: primary key (conversation_id, user_id); direct conversation: unique `direct_key`."
+    - "friend request: unique generated pair (user_low_id, user_high_id)."
+    - "username and email: unique indexes are the source of truth; a duplicate key error (1062) during register is turned into a 422, the pre-check alone is not enough."
+    - "notification duplicates: unique `dedupe_key`."
+    - "double submit / retry: `Idempotency-Key` + unique (user_id, key)."
+    - "read marker: monotonic UPDATE, never moves backwards."
+    - "counters: `likes_count + 1` style atomic UPDATE inside the transaction, never read-modify-write in PHP."
