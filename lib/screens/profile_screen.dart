@@ -593,7 +593,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(post.content, style: textTheme.bodyLarge),
-                        if (post.imageUrl != null) ...[
+                        if (post.hasMedia) ...[
                           const SizedBox(height: AppSpacing.md),
                           PostMedia(post: post),
                         ],

@@ -7,6 +7,7 @@ import 'package:flutter_learning/models/friend_request.dart';
 import 'package:flutter_learning/models/message.dart';
 import 'package:flutter_learning/models/notification.dart';
 import 'package:flutter_learning/models/post.dart';
+import 'package:flutter_learning/models/post_video.dart';
 import 'package:flutter_learning/models/post_interactions.dart';
 import 'package:flutter_learning/models/server_tab.dart';
 import 'package:flutter_learning/models/story.dart';
@@ -71,6 +72,7 @@ class SocialHubApp extends StatefulWidget {
 
   /// Opens the photo library; tests replace it with a fake.
   final Future<String?> Function() pickPhoto;
+  final Future<String?> Function() pickVideo;
 
   /// Push notifications. Defaults to none (the mock app and the tests).
   final PushService? push;
@@ -82,6 +84,7 @@ class SocialHubApp extends StatefulWidget {
     super.key,
     this.api,
     this.pickPhoto = pickPhotoPath,
+    this.pickVideo = pickVideoPath,
     this.push,
     this.audio,
   });
@@ -172,6 +175,7 @@ class _SocialHubAppState extends State<SocialHubApp> {
               api: _api,
               initialUser: user,
               pickPhoto: widget.pickPhoto,
+              pickVideo: widget.pickVideo,
               push: _push,
               audio: widget.audio ?? const NoAudioPreview(),
               onLogout: _signOut,
@@ -186,6 +190,7 @@ class MainScreen extends StatefulWidget {
   final SocialApi api;
   final UserModel initialUser;
   final Future<String?> Function() pickPhoto;
+  final Future<String?> Function() pickVideo;
   final PushService push;
   final AudioPreview audio;
   final Future<void> Function({String? notice}) onLogout;
@@ -197,6 +202,7 @@ class MainScreen extends StatefulWidget {
     required this.api,
     required this.initialUser,
     required this.pickPhoto,
+    required this.pickVideo,
     this.push = const NoPushService(),
     this.audio = const NoAudioPreview(),
     required this.onLogout,
@@ -259,6 +265,7 @@ class _MainScreenState extends State<MainScreen> {
   Timer? _chatTimer;
   Timer? _conversationsTimer;
   Timer? _presenceTimer;
+  Timer? _videoTimer;
   static const _presenceHeartbeatEvery = Duration(seconds: 45);
   String? _openChatId;
   bool _pollingChat = false;
@@ -376,6 +383,7 @@ class _MainScreenState extends State<MainScreen> {
       subscription.cancel();
     }
     _presenceTimer?.cancel();
+    _videoTimer?.cancel();
     _chatTimer?.cancel();
     _conversationsTimer?.cancel();
     _chatChanges.dispose();
@@ -745,13 +753,54 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
+  /// The server converts a new video on its queue, so ask every 5 s (for at
+  /// most 5 minutes) until my video posts are ready or have failed.
+  void _watchVideos() {
+    _videoTimer?.cancel();
+    var rounds = 0;
+    bool waiting(Post post) =>
+        post.author.id == _currentUser.id &&
+        post.video != null &&
+        post.video!.localPath == null &&
+        post.video!.isProcessing;
+
+    _videoTimer = Timer.periodic(const Duration(seconds: 5), (timer) async {
+      final pending = _posts.where(waiting).toList();
+      if (pending.isEmpty || ++rounds > 60) {
+        timer.cancel();
+        return;
+      }
+      for (final post in pending) {
+        try {
+          final fresh = await widget.api.loadPost(post.id);
+          if (!mounted || fresh.video == null || fresh.video!.isProcessing) {
+            continue;
+          }
+          setState(() {
+            _posts = [for (final p in _posts) p.id == post.id ? fresh : p];
+          });
+        } on ApiException {
+          // Try again on the next round.
+        }
+      }
+    });
+  }
+
+  void _handleAddVideoPost(
+    String text,
+    String feeling,
+    String privacy,
+    String videoPath,
+  ) => _handleAddPost(text, feeling, privacy, null, null, videoPath: videoPath);
+
   void _handleAddPost(
     String text,
     String feeling,
     String privacy,
     String? imageUrl,
-    String? imageId,
-  ) {
+    String? imageId, {
+    String? videoPath,
+  }) {
     final draft = Post(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       author: _currentUser,
@@ -765,6 +814,7 @@ class _MainScreenState extends State<MainScreen> {
       comments: 0,
       shares: 0,
       isLiked: false,
+      video: videoPath == null ? null : PostVideo.draft(videoPath),
     );
     setState(() {
       _posts.insert(0, draft);
@@ -784,6 +834,7 @@ class _MainScreenState extends State<MainScreen> {
             ?..remove(draft.id)
             ..add(saved.id);
         });
+        _watchVideos();
       },
       rollback: () {
         _posts = _posts.where((post) => post.id != draft.id).toList();
@@ -1720,6 +1771,22 @@ class _MainScreenState extends State<MainScreen> {
 
   /// Opens the photo library. A refused permission or a missing library shows
   /// a message instead of crashing.
+  Future<String?> _pickVideo() async {
+    try {
+      return await widget.pickVideo();
+    } on PlatformException {
+      if (!mounted) return null;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Không thể mở thư viện video. Hãy kiểm tra quyền truy cập.',
+          ),
+        ),
+      );
+      return null;
+    }
+  }
+
   Future<String?> _pickPhoto() async {
     try {
       return await widget.pickPhoto();
@@ -1982,6 +2049,8 @@ class _MainScreenState extends State<MainScreen> {
         currentUser: _currentUser,
         onPostCreated: _handleAddPost,
         onPickPhoto: widget.api.isRemote ? _pickPhoto : null,
+        onPickVideo: widget.api.isRemote ? _pickVideo : null,
+        onVideoPostCreated: widget.api.isRemote ? _handleAddVideoPost : null,
       ),
       NotificationsScreen(
         notifications: _notifications,

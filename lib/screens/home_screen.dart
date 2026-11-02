@@ -212,7 +212,9 @@ class _HomeScreenState extends State<HomeScreen> {
             .toList();
       case HomeFeedFilter.media:
         if (_serverTab != null) return _fromServerTab(searched);
-        return searched.where((post) => post.imageUrl != null).toList();
+        return searched
+            .where((post) => post.imageUrl != null || post.video != null)
+            .toList();
     }
   }
 
@@ -723,7 +725,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ],
-          if (post.imageUrl != null) ...[
+          if (post.hasMedia) ...[
             const SizedBox(height: AppSpacing.md),
             Padding(
               padding: const EdgeInsets.only(right: AppSpacing.md),

@@ -12,6 +12,7 @@ import 'package:flutter_learning/models/message.dart';
 import 'package:flutter_learning/models/music_track.dart';
 import 'package:flutter_learning/models/notification.dart';
 import 'package:flutter_learning/models/post.dart';
+import 'package:flutter_learning/models/post_video.dart';
 import 'package:flutter_learning/models/story.dart';
 import 'package:flutter_learning/models/user.dart';
 import 'package:flutter_learning/models/user_note.dart';
@@ -305,6 +306,7 @@ class _FakeRemoteApi extends SocialApi {
       comments: 0,
       shares: 0,
       isLiked: false,
+      video: draft.video == null ? null : const PostVideo(status: 'processing'),
     );
   }
 
@@ -373,7 +375,14 @@ class _FakeRemoteApi extends SocialApi {
   Future<Post> loadPost(String postId) async {
     postsLoaded.add(postId);
     if (postLoadError != null) throw postLoadError!;
-    return [..._allPosts, ...extraPosts].firstWhere((p) => p.id == postId);
+    return [..._allPosts, ...extraPosts].firstWhere(
+      (p) => p.id == postId,
+      orElse: () => throw const ApiException(
+        statusCode: 404,
+        code: 'not_found',
+        message: 'Không tìm thấy',
+      ),
+    );
   }
 
   @override
@@ -749,6 +758,7 @@ Future<void> _pump(
   WidgetTester tester,
   _FakeRemoteApi api, {
   Future<String?> Function()? pickPhoto,
+  Future<String?> Function()? pickVideo,
   PushService? push,
   AudioPreview? audio,
 }) async {
@@ -756,6 +766,7 @@ Future<void> _pump(
     SocialHubApp(
       api: api,
       pickPhoto: pickPhoto ?? () async => null,
+      pickVideo: pickVideo ?? () async => null,
       push: push,
       audio: audio,
     ),
@@ -938,6 +949,135 @@ void main() {
 
       expect(find.text('Mật khẩu cần ít nhất 8 ký tự'), findsOneWidget);
       expect(find.text('Từ 3 đến 30 ký tự: chữ, số hoặc _'), findsOneWidget);
+    });
+  });
+
+  group('video posts', () {
+    Post videoPost(PostVideo video, {String id = 'v1'}) => Post(
+      id: id,
+      author: _lan,
+      content: 'Clip chuyến đi',
+      createdAt: '1 giờ trước',
+      likes: 0,
+      comments: 0,
+      shares: 0,
+      isLiked: false,
+      video: video,
+    );
+
+    const ready = PostVideo(
+      status: 'ready',
+      url: 'http://localhost/storage/videos/a.mp4',
+      thumbnailUrl: 'http://localhost/storage/videos/a.jpg',
+      durationSeconds: 75,
+      width: 720,
+      height: 1280,
+    );
+
+    testWidgets('Create Post picks a video and sends its path', (tester) async {
+      final api = _FakeRemoteApi(sessionUser: _me);
+      await _pump(tester, api, pickVideo: () async => '/videos/trip.mp4');
+      addTearDown(
+        () => tester.pumpWidget(const SizedBox()),
+      ); // stops the polling
+
+      await tapTab(tester, createTab);
+      await tester.tap(find.text('Chọn video'));
+      await tester.pumpAndSettle();
+      expect(find.text('Đã chọn 1 video'), findsOneWidget);
+      await tester.tap(find.text('Đăng'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      final draft = api.createdPosts.single;
+      expect(draft.video?.localPath, '/videos/trip.mp4');
+      expect(draft.imageUrl, isNull);
+    });
+
+    testWidgets('a picked photo replaces a picked video', (tester) async {
+      final api = _FakeRemoteApi(sessionUser: _me);
+      await _pump(
+        tester,
+        api,
+        pickPhoto: () async => '/photos/a.jpg',
+        pickVideo: () async => '/videos/trip.mp4',
+      );
+
+      await tapTab(tester, createTab);
+      await tester.tap(find.text('Chọn video'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Chọn ảnh'));
+      await tester.pumpAndSettle();
+      expect(find.text('Đã chọn 1 video'), findsNothing);
+      await tester.tap(find.text('Đăng'));
+      await tester.pumpAndSettle();
+
+      expect(api.createdPosts.single.video, isNull);
+      expect(api.createdPosts.single.imageUrl, '/photos/a.jpg');
+    });
+
+    testWidgets('a converted video shows its length and opens the player', (
+      tester,
+    ) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(800, 3000);
+      addTearDown(tester.view.reset);
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..extraPosts.add(videoPost(ready));
+      await _pump(tester, api);
+
+      expect(find.text('Clip chuyến đi'), findsOneWidget);
+      expect(find.text('1:15'), findsOneWidget);
+      await tester.ensureVisible(find.byIcon(Icons.play_arrow_rounded));
+      await tester.tap(find.byIcon(Icons.play_arrow_rounded));
+      await tester.pumpAndSettle();
+
+      // No video plugin runs in tests, so the player says it cannot play.
+      expect(find.text('Không phát được video'), findsOneWidget);
+    });
+
+    testWidgets('a video that is not ready or failed says so', (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(800, 3000);
+      addTearDown(tester.view.reset);
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..extraPosts.addAll([
+          videoPost(const PostVideo(status: 'processing'), id: 'v1'),
+          videoPost(const PostVideo(status: 'failed'), id: 'v2'),
+        ]);
+      // A converting video shows a spinner, which never lets pumpAndSettle end.
+      await tester.pumpWidget(SocialHubApp(api: api));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(find.text('Đang xử lý video...'), findsOneWidget);
+      expect(find.text('Không xử lý được video'), findsOneWidget);
+      expect(find.byIcon(Icons.play_arrow_rounded), findsNothing);
+    });
+
+    testWidgets('my new video turns ready by itself', (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(800, 3000);
+      addTearDown(tester.view.reset);
+      final api = _FakeRemoteApi(sessionUser: _me);
+      await _pump(tester, api, pickVideo: () async => '/videos/trip.mp4');
+      await tapTab(tester, createTab);
+      await tester.tap(find.text('Chọn video'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Đăng'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('Đang xử lý video...'), findsOneWidget);
+
+      api.extraPosts.add(
+        videoPost(ready, id: 'server_${api.createdPosts.single.id}'),
+      );
+      await tester.pump(const Duration(seconds: 6));
+      await tester.pumpAndSettle();
+
+      expect(api.postsLoaded, ['server_${api.createdPosts.single.id}']);
+      expect(find.text('1:15'), findsOneWidget);
+      expect(find.text('Đang xử lý video...'), findsNothing);
     });
   });
 

@@ -98,6 +98,14 @@ info:
     * The Flutter client should resize/compress with `image_picker` (`maxWidth`, `imageQuality`) before uploading.
     * A file larger than the web server limit may be rejected with `413` before PHP runs.
 
+    **Videos** (posts only, field `video`): `video/mp4`, `video/quicktime` or `video/webm`; at most **50 MB** and
+    **60 seconds**. The server checks the real content with ffprobe, keeps the upload only until it has been
+    converted, and stores one H.264/AAC mp4 (at most 720 px wide, `faststart`) plus a JPEG thumbnail beside it
+    (`videos/{yyyy}/{mm}/{ulid}.mp4|jpg`). Conversion runs on the queue (ffmpeg must be installed), so a new video
+    post is first `processing`: only its author sees it, with `video.url` and `video.thumbnailUrl` set to `null`.
+    When the conversion ends the post becomes `ready` (visible according to its privacy) or `failed` (still visible
+    to its author, who can delete it). Clients read the status again on refresh; there is no push for it.
+
     ### Idempotency (recommended)
 
     `POST /posts`, `/posts/{post}/comments`, `/stories` and `/conversations/{conversation}/messages` accept an optional
@@ -1227,7 +1235,7 @@ paths:
         **Search:** `q` filters the feed by post content or author name (Home search). Hidden posts never come back
         through search.
 
-        **Followed people:** the public posts of people the caller follows (not friends) also appear. **Tabs (`filter`):** `all` (default) is the list above. `friends` keeps only the posts of accepted friends. `following` keeps only the posts of people the caller follows (explicit follows only: being friends does not count). `media` keeps only the posts that have at least one image.
+        **Followed people:** the public posts of people the caller follows (not friends) also appear. **Tabs (`filter`):** `all` (default) is the list above. `friends` keeps only the posts of accepted friends. `following` keeps only the posts of people the caller follows (explicit follows only: being friends does not count). `media` keeps only the posts that have at least one image or a `ready` video.
         `popular` keeps the last 7 days and sorts by likes (then `id`), like Explore's trending, but only over the
         posts of this feed. The cursor of one filter is rejected on another.
 
@@ -1269,8 +1277,7 @@ paths:
         * `for_you` (default): newest first (`createdAt` desc, `id` desc).
         * `trending`: public posts from the last 7 days (server setting), most liked first (`likes` desc, then `id` desc).
           Counts can change between pages, so a post may repeat or be skipped; clients de-duplicate by `id`.
-        * `short_video`: **reserved**. Posts have no video support in v1, so this always returns an empty page.
-          It exists so the "Video ngắn" chip needs no special case.
+        * `short_video`: public posts whose video is `ready`, newest first.
 
         **Search:** `q` filters by content or author name and combines with `filter`.
       parameters:
@@ -1302,13 +1309,15 @@ paths:
       description: |
         **Authentication:** required. **Rate limit:** 30 per hour. Supports `Idempotency-Key`.
 
-        `multipart/form-data` when images are attached; `application/json` otherwise.
+        `multipart/form-data` when images or a video are attached; `application/json` otherwise.
 
         **Validation** (mirrors `CreatePostScreen._submitPost`, plus server limits):
-        * `content`: string, max 5000 characters, trimmed. May be empty **only** if an `image` is present.
+        * `content`: string, max 5000 characters, trimmed. May be empty **only** if an `image` or a `video` is present.
         * `images[]`: optional, 1-10 images (see Uploads), kept in the order sent. `image` (one file) is still accepted
           and means a list of one; sending both is `422` on `images`. More than 10 is `422`.
-        * A post needs non-blank `content` **or** an image; otherwise `422` on `content`.
+        * `video`: optional, one file (see Uploads). Not together with images (`422` on `video`). A file that is not a
+          video, or is longer than 60 seconds, is `422` on `video`.
+        * A post needs non-blank `content`, an image **or** a video; otherwise `422` on `content`.
         * `feeling`: optional, one of `cheerful`, `excited`, `happy`; `null` means no feeling.
         * `privacy`: optional, one of `public`, `friends`, `only_me`; default `public`.
 
@@ -2467,7 +2476,7 @@ components:
       x-backend-entity: posts
       x-not-exposed:
         - "imageId (mock image identity; replaced by the uploaded image)"
-      required: [id, author, content, imageUrl, imageUrls, feeling, privacy, createdAt, likes, comments, shares, isLiked, isSaved, isHidden]
+      required: [id, author, content, imageUrl, imageUrls, video, feeling, privacy, createdAt, likes, comments, shares, isLiked, isSaved, isHidden]
       properties:
         id: {$ref: '#/components/schemas/Id'}
         author: {$ref: '#/components/schemas/UserSummary'}
@@ -2478,6 +2487,11 @@ components:
           maxItems: 10
           items: {type: string, format: uri}
           description: 'All images in display order (empty when there is none).'
+        video:
+          anyOf:
+            - $ref: '#/components/schemas/PostVideo'
+            - type: 'null'
+          description: 'The video of the post, or `null`. A post has images or a video, never both.'
         feeling:
           anyOf:
             - $ref: '#/components/schemas/Feeling'
@@ -2504,10 +2518,21 @@ components:
         isLiked: true
         isSaved: false
         isHidden: false
+    PostVideo:
+      type: object
+      required: [status, url, thumbnailUrl, durationSeconds, width, height]
+      properties:
+        status: {type: string, enum: [processing, ready, failed]}
+        url: {type: [string, 'null'], format: uri, description: 'The mp4; `null` unless `ready`.'}
+        thumbnailUrl: {type: [string, 'null'], format: uri, description: 'A JPEG still; `null` unless `ready`.'}
+        durationSeconds: {type: [integer, 'null'], minimum: 1, maximum: 60}
+        width: {type: [integer, 'null']}
+        height: {type: [integer, 'null']}
     CreatePostRequest:
       type: object
       properties:
         content: {type: string, maxLength: 5000}
+        video: {type: string, format: binary, description: 'One video: video/mp4, video/quicktime or video/webm, max 50 MB and 60 seconds. Not together with images.'}
         image: {type: string, format: binary, description: 'One image (kept for older clients); same as `images` with a single file. image/jpeg, image/png or image/webp, max 10 MB.'}
         images:
           type: array
@@ -2963,6 +2988,13 @@ x-database:
         - {name: user_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
         - {name: content, type: text, nullable: true, note: "API prints null as empty string"}
         - {name: image_path, type: "varchar(255)", nullable: true}
+        - {name: video_status, type: "varchar(12)", nullable: true, note: "processing | ready | failed; null without a video"}
+        - {name: video_source_path, type: "varchar(255)", nullable: true, note: "the upload as sent, kept until the queue job has converted it"}
+        - {name: video_path, type: "varchar(255)", nullable: true}
+        - {name: video_thumb_path, type: "varchar(255)", nullable: true}
+        - {name: video_duration, type: "smallint unsigned", nullable: true, note: "seconds"}
+        - {name: video_width, type: "smallint unsigned", nullable: true}
+        - {name: video_height, type: "smallint unsigned", nullable: true}
         - {name: feeling, type: "varchar(20)", nullable: true, note: "cheerful | excited | happy"}
         - {name: privacy, type: "varchar(10)", nullable: false, default: public, note: "public | friends | only_me"}
         - {name: likes_count, type: "int unsigned", nullable: false, default: 0}
@@ -2972,7 +3004,7 @@ x-database:
         - {name: updated_at, type: timestamp, nullable: true}
         - {name: deleted_at, type: timestamp, nullable: true}
       checks:
-        - "content IS NOT NULL OR image_path IS NOT NULL (not enforced by MariaDB 10.1; blank-after-trim content is rejected by validation anyway, which is where this must actually be checked)"
+        - "content IS NOT NULL OR image_path IS NOT NULL OR video_status IS NOT NULL (not enforced by MariaDB 10.1; blank-after-trim content is rejected by validation anyway, which is where this must actually be checked)"
       indexes:
         - {columns: [user_id, created_at, id], note: "profile posts and the friends part of the feed"}
         - {columns: [privacy, created_at, id], note: "Explore `for_you` and the 7-day window of `trending`"}

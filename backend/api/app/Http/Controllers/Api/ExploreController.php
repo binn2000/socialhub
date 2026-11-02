@@ -27,13 +27,13 @@ class ExploreController extends Controller
 
         // Explore ignores "hide" on purpose: it only looks at public posts.
         $query = Post::where('privacy', 'public')->has('author')->matching($q);
+        Post::hideUnfinishedVideos($query);
         Blocks::exclude($query, $request->user()->id, 'posts.user_id');
 
         return match ($filter) {
             'for_you' => PostController::page($request, $query, $scope),
             'trending' => self::trending($request, $query, $scope),
-            // Reserved: posts have no video in v1.
-            'short_video' => ['data' => [], 'meta' => ['nextCursor' => null, 'hasMore' => false]],
+            'short_video' => PostController::page($request, $query->where('posts.video_status', 'ready'), $scope),
         };
     }
 

@@ -187,7 +187,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                     style: Theme.of(context).textTheme.bodyLarge,
                   ),
                 ],
-                if (post.imageUrl != null) ...[
+                if (post.hasMedia) ...[
                   const SizedBox(height: AppSpacing.md),
                   PostMedia(post: post),
                 ],

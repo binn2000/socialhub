@@ -143,6 +143,7 @@ void main() {
       await tester.tap(find.text('Xóa ảnh đã chọn'));
       await tester.pumpAndSettle();
       expect(find.text('Chọn ảnh mock'), findsOneWidget);
+      expect(find.text('Chọn video'), findsNothing); // server only
       await _submit(tester);
 
       expect(submitted.single.text, 'Chỉ còn chữ');

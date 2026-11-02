@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_learning/models/message.dart';
+import 'package:flutter_learning/models/post_video.dart';
 import 'package:flutter_learning/models/post.dart';
 import 'package:flutter_learning/models/story.dart';
 import 'package:flutter_learning/models/user.dart';
@@ -396,6 +397,48 @@ void main() {
       expect(saved.id, '99');
     },
   );
+
+  test('a post with a picked video is uploaded as multipart', () async {
+    adapter.routes['POST /posts'] = (
+      201,
+      {
+        'data': {
+          ..._post('99'),
+          'video': {
+            'status': 'processing',
+            'url': null,
+            'thumbnailUrl': null,
+            'durationSeconds': null,
+            'width': null,
+            'height': null,
+          },
+        },
+      },
+    );
+    final me = await _signedInUser(api, adapter, tokens);
+    final clip = File('${Directory.systemTemp.path}/http_api_test_clip.mp4')
+      ..writeAsBytesSync(const [1, 2, 3]);
+    addTearDown(clip.deleteSync);
+
+    final saved = await api.createPost(
+      Post(
+        id: 'tmp',
+        author: me,
+        content: 'Clip',
+        privacy: 'Công khai',
+        createdAt: 'Vừa xong',
+        likes: 0,
+        comments: 0,
+        shares: 0,
+        isLiked: false,
+        video: PostVideo.draft(clip.path),
+      ),
+    );
+
+    final data = adapter.last('POST /posts').data as FormData;
+    expect(data.files.map((f) => f.key), ['video']);
+    expect(saved.video?.isProcessing, isTrue);
+  });
 
   test('a post with a picked photo is uploaded as multipart', () async {
     adapter.routes['POST /posts'] = (201, {'data': _post('99')});

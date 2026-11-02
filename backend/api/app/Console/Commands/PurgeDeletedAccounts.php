@@ -32,6 +32,9 @@ class PurgeDeletedAccounts extends Command
     {
         $paths = collect([$user->avatar_path, $user->cover_path])
             ->merge(DB::table('posts')->where('user_id', $user->id)->pluck('image_path'))
+            ->merge(DB::table('posts')->where('user_id', $user->id)->pluck('video_path'))
+            ->merge(DB::table('posts')->where('user_id', $user->id)->pluck('video_thumb_path'))
+            ->merge(DB::table('posts')->where('user_id', $user->id)->pluck('video_source_path'))
             ->merge(DB::table('post_images')->whereIn('post_id', DB::table('posts')->where('user_id', $user->id)->select('id'))->pluck('path'))
             ->merge(DB::table('message_attachments')->whereIn('message_id', DB::table('messages')->where('sender_id', $user->id)->select('id'))->pluck('path'))
             ->merge(DB::table('stories')->where('user_id', $user->id)->pluck('image_path'))

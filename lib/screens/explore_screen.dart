@@ -434,7 +434,7 @@ class _ExploreTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final hasImage = post.imageUrl != null;
+    final hasImage = post.hasMedia;
     final summary = post.content.isEmpty ? 'Bài viết có ảnh' : post.content;
 
     return Semantics(
@@ -458,7 +458,7 @@ class _ExploreTile extends StatelessWidget {
               children: [
                 Expanded(
                   child: hasImage
-                      ? PostMedia(post: post)
+                      ? PostMedia(post: post, playable: false)
                       : Container(
                           color: colorScheme.primaryContainer,
                           padding: const EdgeInsets.all(12),
@@ -615,7 +615,7 @@ class _ExplorePostDetails extends StatelessWidget {
               const SizedBox(height: 14),
               Text(post.content, style: const TextStyle(height: 1.5)),
             ],
-            if (post.imageUrl != null) ...[
+            if (post.hasMedia) ...[
               const SizedBox(height: 14),
               PostMedia(post: post),
             ],

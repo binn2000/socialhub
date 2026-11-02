@@ -178,7 +178,7 @@ class _SavedPostCard extends StatelessWidget {
             const SizedBox(height: AppSpacing.md),
             Text(post.content, style: textTheme.bodyLarge),
           ],
-          if (post.imageUrl != null) ...[
+          if (post.hasMedia) ...[
             const SizedBox(height: AppSpacing.md),
             PostMedia(post: post),
           ],

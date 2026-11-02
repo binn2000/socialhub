@@ -128,6 +128,37 @@ void main() {
     expect(post.imageUrl, isNull);
   });
 
+  test('a post carries its video, with absolute URLs once it is ready', () {
+    final post = postFromJson({
+      'id': 'p1',
+      'author': _author(),
+      'content': '',
+      'imageUrl': null,
+      'video': {
+        'status': 'ready',
+        'url': 'http://localhost:8000/storage/videos/a.mp4',
+        'thumbnailUrl': 'http://localhost:8000/storage/videos/a.jpg',
+        'durationSeconds': 75,
+        'width': 720,
+        'height': 1280,
+      },
+      'feeling': null,
+      'privacy': 'public',
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+      'likes': 0,
+      'comments': 0,
+      'shares': 0,
+      'isLiked': false,
+    }, absoluteUrl: (url) => url.replaceFirst('localhost', '10.0.2.2'));
+
+    final video = post.video!;
+    expect(video.isReady, isTrue);
+    expect(video.url, 'http://10.0.2.2:8000/storage/videos/a.mp4');
+    expect(video.durationLabel, '1:15');
+    expect(post.hasMedia, isTrue);
+    expect(post.imageUrl, isNull);
+  });
+
   test('labels convert back to the identifiers the API expects', () {
     expect(privacyValue('Bạn bè'), 'friends');
     expect(privacyValue('unknown'), isNull);

@@ -40,6 +40,12 @@ return [
         'country' => env('MUSIC_COUNTRY', 'VN'),
     ],
 
+    // Video uploads are checked with ffprobe and converted with ffmpeg (both must be installed).
+    'ffmpeg' => [
+        'binary' => env('FFMPEG_BINARY', 'ffmpeg'),
+        'ffprobe' => env('FFPROBE_BINARY', 'ffprobe'),
+    ],
+
     'spotify' => [
         'client_id' => env('SPOTIFY_CLIENT_ID'),
         'client_secret' => env('SPOTIFY_CLIENT_SECRET'),

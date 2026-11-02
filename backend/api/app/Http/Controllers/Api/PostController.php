@@ -3,11 +3,13 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\ProcessPostVideo;
 use App\Models\Post;
 use App\Models\PostImage;
 use App\Support\Cursor;
 use App\Support\ImageStore;
 use App\Support\PostPresenter;
+use App\Support\VideoStore;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -21,6 +23,7 @@ class PostController extends Controller
         $data = $request->validate([
             'content' => ['nullable', 'string', 'max:5000'],
             'image' => ImageStore::rules(),
+            'video' => VideoStore::rules(),
             'images' => ['nullable', 'array', 'max:10'],
             'images.*' => ImageStore::rules(required: true),
             'feeling' => ['nullable', Rule::in(['cheerful', 'excited', 'happy'])],
@@ -30,26 +33,37 @@ class PostController extends Controller
         if ($request->hasFile('image') && $request->hasFile('images')) {
             throw ValidationException::withMessages(['images' => [__('Send either image or images, not both.')]]);
         }
+        if ($request->hasFile('video') && ($request->hasFile('image') || $request->hasFile('images'))) {
+            throw ValidationException::withMessages(['video' => [__('A post has either images or a video, not both.')]]);
+        }
+        $video = $request->file('video');
         $files = $request->hasFile('images') ? $request->file('images') : array_filter([$request->file('image')]);
 
         $content = trim((string) ($data['content'] ?? ''));
-        if ($content === '' && $files === []) {
-            throw ValidationException::withMessages(['content' => [__('A post needs text or an image.')]]);
+        if ($content === '' && $files === [] && ! $video) {
+            throw ValidationException::withMessages(['content' => [__('A post needs text, an image or a video.')]]);
+        }
+        if ($video) {
+            VideoStore::probe($video->getRealPath());
         }
 
         $paths = [];
+        $sourcePath = null;
         try {
+            $sourcePath = $video ? VideoStore::storeSource($video) : null;
             foreach ($files as $index => $file) {
                 $paths[] = ImageStore::store($file, 'posts', $request->hasFile('images') ? "images.$index" : 'image');
             }
 
-            $post = DB::transaction(function () use ($request, $content, $data, $paths) {
+            $post = DB::transaction(function () use ($request, $content, $data, $paths, $sourcePath) {
                 $post = Post::create([
                     'user_id' => $request->user()->id,
                     'content' => $content === '' ? null : $content,
                     'image_path' => $paths[0] ?? null,
                     'feeling' => $data['feeling'] ?? null,
                     'privacy' => $data['privacy'] ?? 'public',
+                    'video_status' => $sourcePath ? 'processing' : null,
+                    'video_source_path' => $sourcePath,
                 ]);
                 foreach ($paths as $position => $path) {
                     PostImage::create(['post_id' => $post->id, 'path' => $path, 'position' => $position, 'created_at' => now()]);
@@ -59,7 +73,12 @@ class PostController extends Controller
             });
         } catch (\Throwable $e) {
             array_map(ImageStore::delete(...), $paths);
+            VideoStore::delete($sourcePath);
             throw $e;
+        }
+
+        if ($sourcePath) {
+            ProcessPostVideo::dispatch($post->id)->afterCommit();
         }
 
         return response()->json(['data' => PostPresenter::one($post->refresh(), $request->user())], 201)
@@ -101,7 +120,7 @@ class PostController extends Controller
             $post->delete();
         });
         // Soft delete keeps the rows, so the files are removed here.
-        PostImage::where('post_id', $post->id)->pluck('path')->push($post->image_path)->filter()->unique()
+        PostImage::where('post_id', $post->id)->pluck('path')->push($post->image_path, $post->video_path, $post->video_thumb_path, $post->video_source_path)->filter()->unique()
             ->each(fn (string $path) => ImageStore::deleteLater($path));
 
         return response()->json(null, 204);
@@ -121,7 +140,7 @@ class PostController extends Controller
         return match ($filter) {
             'friends' => self::page($request, $query->fromFriends($request->user()), $scope),
             'following' => self::page($request, $query->whereIn('posts.user_id', fn ($s) => $s->select('followee_id')->from('follows')->where('follower_id', $request->user()->id)), $scope),
-            'media' => self::page($request, $query->whereNotNull('posts.image_path'), $scope),
+            'media' => self::page($request, $query->where(fn ($m) => $m->whereNotNull('posts.image_path')->orWhere('posts.video_status', 'ready')), $scope),
             'popular' => ExploreController::trending($request, $query, $scope),
             default => self::page($request, $query, $scope),
         };

@@ -463,8 +463,9 @@ class HttpSocialApi extends SocialApi {
   /// Body for creating a post with optional multiple images.
   Future<Object> _postCreateBody(
     Map<String, Object?> fields,
-    List<String> photos,
-  ) async {
+    List<String> photos, {
+    String? videoPath,
+  }) async {
     final present = {
       for (final entry in fields.entries)
         if (entry.value != null && entry.value != '') entry.key: entry.value,
@@ -473,6 +474,12 @@ class HttpSocialApi extends SocialApi {
       for (final p in photos)
         if (_localPhoto(p) != null) _localPhoto(p)!,
     ];
+    if (videoPath != null && _localPhoto(videoPath) != null) {
+      return FormData.fromMap({
+        ...present,
+        'video': await MultipartFile.fromFile(videoPath),
+      });
+    }
     if (localFiles.isEmpty) return present;
 
     if (localFiles.length == 1) {
@@ -499,11 +506,15 @@ class HttpSocialApi extends SocialApi {
             'POST',
             '/posts',
             idempotent: true,
-            data: await _postCreateBody({
-              'content': draft.content,
-              'feeling': feelingValue(draft.feeling),
-              'privacy': privacyValue(draft.privacy) ?? 'public',
-            }, imagesToUpload),
+            data: await _postCreateBody(
+              {
+                'content': draft.content,
+                'feeling': feelingValue(draft.feeling),
+                'privacy': privacyValue(draft.privacy) ?? 'public',
+              },
+              imagesToUpload,
+              videoPath: draft.video?.localPath,
+            ),
           ))['data']
           as Json,
       absoluteUrl: _absoluteUrl,

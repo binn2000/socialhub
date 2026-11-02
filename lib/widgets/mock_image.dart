@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_learning/widgets/post_video_view.dart';
 import 'package:flutter_learning/models/post.dart';
 import 'package:flutter_learning/theme/app_tokens.dart';
 
@@ -112,10 +113,20 @@ class MockImagePreview extends StatelessWidget {
 class PostMedia extends StatelessWidget {
   final Post post;
 
-  const PostMedia({super.key, required this.post});
+  /// Whether a server video starts when tapped (see [PostVideoView]).
+  final bool playable;
+
+  const PostMedia({super.key, required this.post, this.playable = true});
 
   @override
   Widget build(BuildContext context) {
+    final video = post.video;
+    if (video != null) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        child: PostVideoView(video: video, playable: playable),
+      );
+    }
     final images = post.allImages;
     final fallback = _fallback(post);
 

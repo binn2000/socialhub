@@ -5,6 +5,7 @@ import 'package:flutter_learning/models/message.dart';
 import 'package:flutter_learning/models/notification.dart';
 import 'package:flutter_learning/models/music_track.dart';
 import 'package:flutter_learning/models/post.dart';
+import 'package:flutter_learning/models/post_video.dart';
 import 'package:flutter_learning/models/user_note.dart';
 import 'package:flutter_learning/models/story.dart';
 import 'package:flutter_learning/models/user.dart';
@@ -128,6 +129,22 @@ UserModel userFromJson(Json json, {String Function(String)? absoluteUrl}) {
   );
 }
 
+PostVideo? videoFromJson(Json? json, {String Function(String)? absoluteUrl}) =>
+    json == null
+    ? null
+    : PostVideo(
+        status: json['status'] as String,
+        url: json['url'] == null
+            ? null
+            : _urlOrEmpty(json['url'] as String, absoluteUrl),
+        thumbnailUrl: json['thumbnailUrl'] == null
+            ? null
+            : _urlOrEmpty(json['thumbnailUrl'] as String, absoluteUrl),
+        durationSeconds: json['durationSeconds'] as int?,
+        width: json['width'] as int?,
+        height: json['height'] as int?,
+      );
+
 Post postFromJson(Json json, {String Function(String)? absoluteUrl}) {
   final imageUrl = json['imageUrl'] as String?;
   final rawUrls = json['imageUrls'] as List<dynamic>?;
@@ -145,6 +162,7 @@ Post postFromJson(Json json, {String Function(String)? absoluteUrl}) {
         ? null
         : (absoluteUrl == null ? imageUrl : absoluteUrl(imageUrl)),
     imageUrls: imageUrls,
+    video: videoFromJson(json['video'] as Json?, absoluteUrl: absoluteUrl),
     feeling: feelingLabel(json['feeling'] as String?),
     privacy: privacyLabel(json['privacy'] as String?),
     createdAt: timeAgo(json['createdAt'] as String),

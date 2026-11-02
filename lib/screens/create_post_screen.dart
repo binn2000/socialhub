@@ -22,6 +22,18 @@ class CreatePostScreen extends StatefulWidget {
   /// it picks one of the mock images.
   final Future<String?> Function()? onPickPhoto;
 
+  /// Opens the video library and returns the chosen file's path (server
+  /// only; null hides the video row). A post has photos or a video, not both,
+  /// and a video goes through [onVideoPostCreated].
+  final Future<String?> Function()? onPickVideo;
+  final void Function(
+    String text,
+    String feeling,
+    String privacy,
+    String videoPath,
+  )?
+  onVideoPostCreated;
+
   /// Whether a post is currently being uploaded to the server.
   final bool isSubmitting;
 
@@ -30,6 +42,8 @@ class CreatePostScreen extends StatefulWidget {
     required this.currentUser,
     required this.onPostCreated,
     this.onPickPhoto,
+    this.onPickVideo,
+    this.onVideoPostCreated,
     this.isSubmitting = false,
   });
 
@@ -46,6 +60,7 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
   String _selectedPrivacy = _defaultPrivacy;
   MockImageChoice? _selectedImage;
   String? _photoPath;
+  String? _videoPath;
   String? _statusMessage;
   bool _statusIsError = false;
 
@@ -53,7 +68,10 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
   final List<String> _photoPaths = [];
 
   bool get _hasImage =>
-      _selectedImage != null || _photoPath != null || _photoPaths.isNotEmpty;
+      _selectedImage != null ||
+      _photoPath != null ||
+      _photoPaths.isNotEmpty ||
+      _videoPath != null;
 
   @override
   void dispose() {
@@ -77,10 +95,21 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
     final path = await widget.onPickPhoto!();
     if (path == null || !mounted) return;
     setState(() {
+      _videoPath = null;
       _photoPath = path;
       if (!_photoPaths.contains(path)) {
         if (_photoPaths.length < 10) _photoPaths.add(path);
       }
+    });
+  }
+
+  Future<void> _pickVideo() async {
+    final path = await widget.onPickVideo!();
+    if (path == null || !mounted) return;
+    setState(() {
+      _videoPath = path;
+      _photoPath = null;
+      _photoPaths.clear();
     });
   }
 
@@ -144,6 +173,16 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
       _showValidationMessage();
       return;
     }
+    if (_videoPath != null && widget.onVideoPostCreated != null) {
+      widget.onVideoPostCreated!(
+        text,
+        _selectedFeeling,
+        _selectedPrivacy,
+        _videoPath!,
+      );
+      _resetForm(statusMessage: 'Đã đăng bài viết thành công');
+      return;
+    }
     final primaryPath = _photoPaths.isNotEmpty
         ? _photoPaths.first
         : (_photoPath ?? _selectedImage?.assetPath);
@@ -166,6 +205,7 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
       _selectedPrivacy = _defaultPrivacy;
       _selectedImage = null;
       _photoPath = null;
+      _videoPath = null;
       _photoPaths.clear();
       _statusMessage = statusMessage;
       _statusIsError = false;
@@ -372,6 +412,41 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
               if (_selectedImage != null) ...[
                 const SizedBox(height: 12),
                 MockImagePreview(image: _selectedImage!, size: 220),
+              ],
+              if (widget.onPickVideo != null) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: AppDecorations.card(context),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.videocam_outlined,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _videoPath == null
+                              ? 'Thêm video (tối đa 60 giây)'
+                              : 'Đã chọn 1 video',
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      if (_videoPath != null)
+                        TextButton(
+                          onPressed: () => setState(() => _videoPath = null),
+                          child: const Text('Xóa video'),
+                        ),
+                      TextButton(
+                        onPressed: _pickVideo,
+                        child: Text(
+                          _videoPath == null ? 'Chọn video' : 'Đổi video',
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ],
               if (_photoPaths.length > 1) ...[
                 const SizedBox(height: 12),

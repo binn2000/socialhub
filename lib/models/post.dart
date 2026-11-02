@@ -1,3 +1,4 @@
+import 'package:flutter_learning/models/post_video.dart';
 import 'package:flutter_learning/models/user.dart';
 
 class Post {
@@ -17,6 +18,9 @@ class Post {
   final bool isVideo;
   final String? videoDuration;
 
+  /// A real video from the server (the mock posts only use [isVideo]).
+  final PostVideo? video;
+
   const Post({
     required this.id,
     required this.author,
@@ -33,7 +37,14 @@ class Post {
     required this.isLiked,
     this.isVideo = false,
     this.videoDuration,
+    this.video,
   });
+
+  /// Whether the post shows a picture or a video.
+  bool get hasMedia =>
+      video != null ||
+      (imageUrl != null && imageUrl!.isNotEmpty) ||
+      imageUrls.isNotEmpty;
 
   /// All image URLs associated with this post.
   List<String> get allImages {
@@ -52,6 +63,7 @@ class Post {
     bool? isLiked,
     String? privacy,
     List<String>? imageUrls,
+    PostVideo? video,
   }) {
     return Post(
       id: id,
@@ -69,6 +81,7 @@ class Post {
       isLiked: isLiked ?? this.isLiked,
       isVideo: isVideo,
       videoDuration: videoDuration,
+      video: video ?? this.video,
     );
   }
 }

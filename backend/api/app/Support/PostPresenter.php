@@ -20,7 +20,7 @@ class PostPresenter
             'id' => $user->id,
             'name' => $user->name,
             'username' => $user->username,
-            'avatarUrl' => \App\Support\ImageStore::url($user->avatar_path),
+            'avatarUrl' => ImageStore::url($user->avatar_path),
         ];
     }
 
@@ -41,8 +41,16 @@ class PostPresenter
             'id' => $p->id,
             'author' => self::userSummary($p->author),
             'content' => $p->content ?? '',
-            'imageUrl' => \App\Support\ImageStore::url($p->image_path),
-            'imageUrls' => ($images[$p->id] ?? collect())->map(fn ($i) => \App\Support\ImageStore::url($i->path))->values()->all(),
+            'imageUrl' => ImageStore::url($p->image_path),
+            'imageUrls' => ($images[$p->id] ?? collect())->map(fn ($i) => ImageStore::url($i->path))->values()->all(),
+            'video' => $p->video_status === null ? null : [
+                'status' => $p->video_status,
+                'url' => $p->video_status === 'ready' ? VideoStore::url($p->video_path) : null,
+                'thumbnailUrl' => $p->video_status === 'ready' ? VideoStore::url($p->video_thumb_path) : null,
+                'durationSeconds' => $p->video_duration,
+                'width' => $p->video_width,
+                'height' => $p->video_height,
+            ],
             'feeling' => $p->feeling,
             'privacy' => $p->privacy,
             'createdAt' => self::timestamp($p->created_at),

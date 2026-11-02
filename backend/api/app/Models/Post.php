@@ -11,7 +11,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\DB;
 
-#[Fillable(['user_id', 'content', 'image_path', 'feeling', 'privacy'])]
+#[Fillable(['user_id', 'content', 'image_path', 'feeling', 'privacy', 'video_status', 'video_source_path'])]
 class Post extends Model
 {
     use HasUlids, SoftDeletes;
@@ -46,7 +46,19 @@ class Post extends Model
                     self::byFriendOf($f, $viewer->id);
                 });
         });
+        self::hideUnfinishedVideos($query, $viewer->id);
         Blocks::exclude($query, $viewer->id, 'posts.user_id');
+    }
+
+    /** A video post is shown to others only once its video is converted; the author always sees it. */
+    public static function hideUnfinishedVideos(Builder $query, ?string $authorId = null): void
+    {
+        $query->where(function (Builder $v) use ($authorId) {
+            $v->whereNull('posts.video_status')->orWhere('posts.video_status', 'ready');
+            if ($authorId !== null) {
+                $v->orWhere('posts.user_id', $authorId);
+            }
+        });
     }
 
     /** The home feed: own posts plus visible posts of friends, minus what $viewer hid. */
@@ -65,6 +77,7 @@ class Post extends Model
             })
             ->whereNotExists(fn ($h) => $h->select(DB::raw(1))->from('post_hidden')
                 ->whereColumn('post_hidden.post_id', 'posts.id')->where('post_hidden.user_id', $viewer->id));
+        self::hideUnfinishedVideos($query, $viewer->id);
         Blocks::exclude($query, $viewer->id, 'posts.user_id');
     }
 

@@ -11,3 +11,13 @@ Future<String?> pickPhotoPath() async {
   );
   return file?.path;
 }
+
+/// Opens the video library and returns the chosen file's path, or null. The
+/// server accepts at most 60 seconds and 50 MB.
+Future<String?> pickVideoPath() async {
+  final file = await ImagePicker().pickVideo(
+    source: ImageSource.gallery,
+    maxDuration: const Duration(seconds: 60),
+  );
+  return file?.path;
+}
