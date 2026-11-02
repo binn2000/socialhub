@@ -298,7 +298,11 @@ class _FakeRemoteApi extends SocialApi {
   }
 
   @override
-  Future<ChatMessage> sendMessage(String c, ChatMessage draft) async {
+  Future<ChatMessage> sendMessage(
+    String c,
+    ChatMessage draft, {
+    List<String>? attachmentPaths,
+  }) async {
     final completer = sendCompleter;
     if (completer != null) return completer.future;
     return ChatMessage(
@@ -306,8 +310,35 @@ class _FakeRemoteApi extends SocialApi {
       senderId: draft.senderId,
       text: draft.text,
       time: 'Vừa xong',
+      attachments: draft.attachments,
     );
   }
+
+  @override
+  Future<void> followUser(String userId) async {}
+
+  @override
+  Future<void> unfollowUser(String userId) async {}
+
+  @override
+  Future<UserPage> loadFollowers(String userId, {String? cursor}) async =>
+      const UserPage(users: []);
+
+  @override
+  Future<UserPage> loadFollowing(String userId, {String? cursor}) async =>
+      const UserPage(users: []);
+
+  @override
+  Future<void> sendPresence() async {}
+
+  @override
+  Future<void> sendTyping(String conversationId) async {}
+
+  @override
+  Future<void> stopTyping(String conversationId) async {}
+
+  @override
+  Future<UserModel> setShowOnlineStatus(bool enabled) async => _me;
 
   @override
   Future<void> setLiked(String postId, bool liked) async {
@@ -460,12 +491,28 @@ class _FakeRemoteApi extends SocialApi {
       chatHistory[id] == null ? null : List.of(chatHistory[id]!);
 
   @override
-  Future<List<ChatMessage>> loadNewMessages(
+  Future<MessagePoll> loadNewMessages(
     String conversationId, {
     String? afterMessageId,
   }) async {
     pollCalls.add('$conversationId after $afterMessageId');
-    return List.of(newMessages[conversationId] ?? const []);
+    return MessagePoll(
+      messages: List.of(newMessages[conversationId] ?? const []),
+      otherTyping: partnerTyping,
+    );
+  }
+
+  /// What the next poll says about the other person typing.
+  var partnerTyping = false;
+
+  var followingPages = <PostPage>[];
+  final feedFilterCalls = <String>[];
+
+  @override
+  Future<PostPage> loadFeedFilter(String filter, {String? cursor}) async {
+    feedFilterCalls.add('$filter:${cursor ?? ''}');
+    if (listError != null) throw listError!;
+    return followingPages[cursor == null ? 0 : int.parse(cursor.substring(1))];
   }
 
   @override
@@ -481,11 +528,54 @@ class _FakeRemoteApi extends SocialApi {
   @override
   Future<void> markAllNotificationsRead() async {}
 
+  final updatedProfiles = <UserModel>[];
+
   @override
-  Future<UserModel> updateProfile(UserModel user) async => user;
+  Future<UserModel> updateProfile(UserModel user) async {
+    updatedProfiles.add(user);
+    return user;
+  }
 
   @override
   Future<UserModel> uploadAvatar(String filePath) async => _me;
+
+  final coverUploads = <String>[];
+
+  @override
+  Future<UserModel> uploadCover(String filePath) async {
+    coverUploads.add(filePath);
+    return _me.copyWith(coverUrl: 'https://cdn.example/cover.jpg');
+  }
+
+  // Pages the profile tabs and suggestions get; a page's nextCursor names the next one.
+  var photoPages = <PhotoPage>[];
+  var friendPages = <UserPage>[];
+  var suggestionPages = <UserPage>[];
+  ApiException? listError;
+  final listCalls = <String>[];
+
+  T _page<T>(List<T> pages, String? cursor) {
+    if (listError != null) throw listError!;
+    return pages[cursor == null ? 0 : int.parse(cursor.substring(1))];
+  }
+
+  @override
+  Future<PhotoPage> loadUserPhotos(String userId, {String? cursor}) async {
+    listCalls.add('photos:$userId:${cursor ?? ''}');
+    return _page(photoPages, cursor);
+  }
+
+  @override
+  Future<UserPage> loadUserFriends(String userId, {String? cursor}) async {
+    listCalls.add('friends:$userId:${cursor ?? ''}');
+    return _page(friendPages, cursor);
+  }
+
+  @override
+  Future<UserPage> loadSuggestions({String? cursor}) async {
+    listCalls.add('suggestions:${cursor ?? ''}');
+    return _page(suggestionPages, cursor);
+  }
 }
 
 /// A push service the test drives by hand.
@@ -540,6 +630,18 @@ Future<void> _pump(
   );
   await tester.pumpAndSettle();
 }
+
+UserModel _stranger(String id, String name) => UserModel(
+  id: id,
+  name: name,
+  username: '@$id',
+  avatarUrl: '',
+  coverUrl: '',
+  bio: '',
+  mutualFriends: 0,
+  isFriend: false,
+  accentColor: const Color(0xFF6C5CE7),
+);
 
 Post _mine(String id, String content) => Post(
   id: id,
@@ -1582,6 +1684,45 @@ void main() {
       ); // seen, so told to the server
     });
 
+    testWidgets("the other person's typing shows and goes away", (
+      tester,
+    ) async {
+      final api = chatApi();
+      await _pump(tester, api);
+      await openChat(tester);
+      expect(find.text('Lan Hương đang soạn tin...'), findsNothing);
+
+      api.partnerTyping = true;
+      await tester.pump(const Duration(seconds: 4));
+      await tester.pump();
+      expect(find.text('Lan Hương đang soạn tin...'), findsOneWidget);
+
+      api.partnerTyping = false;
+      await tester.pump(const Duration(seconds: 4));
+      await tester.pump();
+      expect(find.text('Lan Hương đang soạn tin...'), findsNothing);
+    });
+
+    testWidgets('typing does not carry over to the next time the chat opens', (
+      tester,
+    ) async {
+      final api = chatApi();
+      await _pump(tester, api);
+      await openChat(tester);
+      api.partnerTyping = true;
+      await tester.pump(const Duration(seconds: 4));
+      await tester.pump();
+      expect(find.text('Lan Hương đang soạn tin...'), findsOneWidget);
+
+      await tester.tap(find.byIcon(Icons.arrow_back_rounded));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Lan Hương'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(find.text('Lan Hương đang soạn tin...'), findsNothing);
+    });
+
     testWidgets('the same message is not added twice', (tester) async {
       final api = chatApi();
       await _pump(tester, api);
@@ -2292,7 +2433,11 @@ void main() {
       await openProfile(tester);
       await tester.tap(find.text('Edit Profile'));
       await tester.pumpAndSettle();
-      await tester.ensureVisible(find.text('Xóa tài khoản'));
+      await tester.scrollUntilVisible(
+        find.text('Xóa tài khoản'),
+        300,
+        scrollable: visibleVerticalScrollable,
+      );
       await tester.tap(find.text('Xóa tài khoản'));
       await tester.pumpAndSettle();
     }
@@ -3034,7 +3179,11 @@ void main() {
         await tapTab(tester, profileTab);
         await tester.tap(find.text('Edit Profile'));
         await tester.pumpAndSettle();
-        await tester.ensureVisible(find.text('Người đã chặn'));
+        await tester.scrollUntilVisible(
+          find.text('Người đã chặn'),
+          300,
+          scrollable: visibleVerticalScrollable,
+        );
         await tester.tap(find.text('Người đã chặn'));
         await tester.pumpAndSettle();
       }
@@ -3227,6 +3376,507 @@ void main() {
         expect(find.textContaining('· Chỉ mình tôi'), findsOneWidget);
         expect(find.byTooltip('Xóa bài viết'), findsOneWidget); // delete stays
       });
+    });
+  });
+
+  group('profile on the server', () {
+    // Tall enough that nothing in a lazily built list is offscreen.
+    void tall(WidgetTester tester) {
+      tester.view.physicalSize = const Size(800, 2400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+    }
+
+    Future<void> openProfile(WidgetTester tester) {
+      tall(tester);
+      return tapTab(tester, profileTab);
+    }
+
+    Future<void> openSection(WidgetTester tester, String label) async {
+      await tester.ensureVisible(find.widgetWithText(ChoiceChip, label));
+      await tester.tap(find.widgetWithText(ChoiceChip, label));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('the cover button uploads the picked photo', (tester) async {
+      final api = _FakeRemoteApi(sessionUser: _me);
+      await _pump(tester, api, pickPhoto: () async => '/photos/cover.jpg');
+      await openProfile(tester);
+
+      await tester.tap(find.text('Đổi ảnh bìa'));
+      await tester.pumpAndSettle();
+
+      expect(api.coverUploads, ['/photos/cover.jpg']);
+    });
+
+    testWidgets('cancelling the picker uploads nothing', (tester) async {
+      final api = _FakeRemoteApi(sessionUser: _me);
+      await _pump(tester, api);
+      await openProfile(tester);
+
+      await tester.tap(find.text('Đổi ảnh bìa'));
+      await tester.pumpAndSettle();
+
+      expect(api.coverUploads, isEmpty);
+    });
+
+    testWidgets('the mock app has no cover button', (tester) async {
+      await pumpSocialHub(tester);
+      await tapTab(tester, profileTab);
+
+      expect(find.text('Đổi ảnh bìa'), findsNothing);
+    });
+
+    testWidgets('the Giới thiệu tab shows only the fields that are filled', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(
+        sessionUser: _me.copyWith(
+          about: const UserAbout(
+            location: 'Hà Nội',
+            workplace: 'SocialHub',
+            birthday: '1998-05-17',
+          ),
+        ),
+      );
+      await _pump(tester, api);
+      await openProfile(tester);
+
+      await openSection(tester, 'Giới thiệu');
+
+      expect(find.text('Hà Nội'), findsOneWidget);
+      expect(find.text('SocialHub'), findsOneWidget);
+      expect(find.text('17/05/1998'), findsOneWidget);
+      expect(find.text('Nơi sống'), findsOneWidget);
+      expect(find.text('Quê quán'), findsNothing); // empty: not shown
+      expect(find.text('Học vấn'), findsNothing);
+    });
+
+    testWidgets('the Ảnh tab is loaded from the server and pages', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..photoPages = [
+          const PhotoPage(
+            photos: [ProfilePhoto(postId: 'p1', imageUrl: 'https://cdn/1.jpg')],
+            nextCursor: 'c1',
+          ),
+          const PhotoPage(
+            photos: [ProfilePhoto(postId: 'p2', imageUrl: 'https://cdn/2.jpg')],
+          ),
+        ];
+      await _pump(tester, api);
+      await openProfile(tester);
+
+      await openSection(tester, 'Ảnh');
+
+      expect(api.listCalls, ['photos:me:']);
+      expect(find.byType(Image), findsOneWidget);
+      await tester.ensureVisible(find.text('Xem thêm'));
+      await tester.tap(find.text('Xem thêm'));
+      await tester.pumpAndSettle();
+
+      expect(api.listCalls, ['photos:me:', 'photos:me:c1']);
+      expect(find.byType(Image), findsNWidgets(2));
+      expect(find.text('Xem thêm'), findsNothing); // last page
+    });
+
+    testWidgets('an empty or failing Ảnh tab says so and can retry', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..listError = const ApiException(
+          code: 'network_error',
+          message: 'Không thể kết nối tới máy chủ',
+        );
+      await _pump(tester, api);
+      await openProfile(tester);
+
+      await openSection(tester, 'Ảnh');
+      expect(find.text('Không thể kết nối tới máy chủ'), findsOneWidget);
+
+      api
+        ..listError = null
+        ..photoPages = [const PhotoPage(photos: [])];
+      await tester.tap(find.text('Thử lại'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Chưa có hình ảnh nào'), findsOneWidget);
+    });
+
+    testWidgets('the Bạn bè tab comes from the server and opens a profile', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..friendPages = [
+          UserPage(users: [_lan.copyWith(isFriend: true)]),
+        ]
+        ..profileToShow = UserProfile(
+          user: _lan,
+          friendship: Friendship.friends,
+          posts: const [],
+        );
+      await _pump(tester, api);
+      await openProfile(tester);
+
+      await openSection(tester, 'Bạn bè');
+      expect(api.listCalls, ['friends:me:']);
+      await tester.tap(find.text('Lan Hương'));
+      await tester.pumpAndSettle();
+
+      expect(api.profilesLoaded, ['lan']);
+    });
+
+    testWidgets("another person's tabs ask for that person", (tester) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..profileToShow = UserProfile(
+          user: _lan,
+          friendship: Friendship.friends,
+          posts: const [],
+        )
+        ..photoPages = [const PhotoPage(photos: [])]
+        ..friendPages = [const UserPage(users: [])];
+      tall(tester);
+      await _pump(tester, api);
+      await tester.tap(find.text('Lan Hương').first);
+      await tester.pumpAndSettle();
+
+      await openSection(tester, 'Ảnh');
+      await openSection(tester, 'Bạn bè');
+
+      expect(api.listCalls, ['photos:lan:', 'friends:lan:']);
+      expect(find.text('Chưa có bạn bè nào'), findsOneWidget);
+    });
+
+    testWidgets('the mock app keeps its local tabs', (tester) async {
+      await pumpSocialHub(tester);
+      await tapTab(tester, profileTab);
+      await openSection(tester, 'Ảnh');
+
+      expect(find.text('Xem thêm'), findsNothing);
+    });
+
+    group('Edit profile', () {
+      Future<void> openEdit(WidgetTester tester) async {
+        await openProfile(tester);
+        await tester.tap(find.text('Edit Profile'));
+        await tester.pumpAndSettle();
+      }
+
+      testWidgets('saves the About fields', (tester) async {
+        final api = _FakeRemoteApi(sessionUser: _me);
+        await _pump(tester, api);
+        await openEdit(tester);
+
+        await tester.enterText(
+          find.widgetWithText(TextFormField, 'Nơi sống'),
+          '  Đà Nẵng ',
+        );
+        await tester.enterText(
+          find.widgetWithText(TextFormField, 'Website'),
+          'https://example.com/me',
+        );
+        await tester.tap(find.text('Lưu'));
+        await tester.pumpAndSettle();
+
+        final saved = api.updatedProfiles.single;
+        expect(saved.about.location, 'Đà Nẵng');
+        expect(saved.about.website, 'https://example.com/me');
+        expect(saved.about.birthday, '');
+      });
+
+      testWidgets('a website must be an http address', (tester) async {
+        final api = _FakeRemoteApi(sessionUser: _me);
+        await _pump(tester, api);
+        await openEdit(tester);
+
+        await tester.enterText(
+          find.widgetWithText(TextFormField, 'Website'),
+          'ftp://example.com',
+        );
+        await tester.tap(find.text('Lưu'));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text('Địa chỉ phải bắt đầu bằng http:// hoặc https://'),
+          findsOneWidget,
+        );
+        expect(api.updatedProfiles, isEmpty);
+      });
+
+      testWidgets(
+        'the birthday comes from the date picker and can be cleared',
+        (tester) async {
+          final api = _FakeRemoteApi(
+            sessionUser: _me.copyWith(
+              about: const UserAbout(birthday: '1998-05-17'),
+            ),
+          );
+          await _pump(tester, api);
+          await openEdit(tester);
+          await tester.ensureVisible(find.text('17/05/1998'));
+          expect(find.text('17/05/1998'), findsOneWidget);
+
+          await tester.tap(find.byTooltip('Xóa ngày sinh'));
+          await tester.pumpAndSettle();
+          expect(find.text('Chưa chọn'), findsOneWidget);
+          await tester.tap(find.text('Lưu'));
+          await tester.pumpAndSettle();
+
+          expect(api.updatedProfiles.single.about.birthday, '');
+        },
+      );
+
+      testWidgets('the mock app has no About fields', (tester) async {
+        await pumpSocialHub(tester);
+        await tapTab(tester, profileTab);
+        await tester.tap(find.text('Edit Profile'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Nơi sống'), findsNothing);
+      });
+    });
+  });
+
+  group('friend suggestions on the server', () {
+    Future<void> openSuggestions(WidgetTester tester) async {
+      await tapTab(tester, friendsTab);
+      await tester.tap(
+        find.widgetWithText(ChoiceChip, 'Người bạn có thể biết'),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('the tab shows what the server suggests', (tester) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..suggestionPages = [
+          const UserPage(users: [_khang]),
+        ];
+      await _pump(tester, api);
+
+      await openSuggestions(tester);
+
+      expect(api.listCalls, ['suggestions:']);
+      expect(find.text('Duy Khang'), findsOneWidget);
+      expect(
+        find.text('Lan Hương'),
+        findsNothing,
+      ); // a friend is not a suggestion
+    });
+
+    testWidgets('a suggestion can be added', (tester) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..suggestionPages = [
+          const UserPage(users: [_khang]),
+        ];
+      await _pump(tester, api);
+      await openSuggestions(tester);
+
+      await tester.tap(find.widgetWithText(OutlinedButton, 'Thêm bạn'));
+      await tester.pumpAndSettle();
+
+      expect(api.friendRequests, ['khang']);
+      expect(find.widgetWithText(OutlinedButton, 'Đang chờ'), findsOneWidget);
+    });
+
+    testWidgets('scrolling to the end loads the next page', (tester) async {
+      tester.view.physicalSize = const Size(800, 600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final many = [for (var i = 0; i < 12; i++) _stranger('s$i', 'Người $i')];
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..suggestionPages = [
+          UserPage(users: many, nextCursor: 'c1'),
+          UserPage(users: [_stranger('last', 'Người cuối')]),
+        ];
+      await _pump(tester, api);
+      await openSuggestions(tester);
+
+      await tester.drag(find.byType(ListView).last, const Offset(0, -3000));
+      await tester.pumpAndSettle();
+
+      expect(api.listCalls, ['suggestions:', 'suggestions:c1']);
+    });
+
+    testWidgets('an error offers a retry and an empty list says so', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..listError = const ApiException(
+          code: 'network_error',
+          message: 'Không thể kết nối tới máy chủ',
+        );
+      await _pump(tester, api);
+      await openSuggestions(tester);
+      expect(find.text('Không thể kết nối tới máy chủ'), findsOneWidget);
+
+      api
+        ..listError = null
+        ..suggestionPages = [const UserPage(users: [])];
+      await tester.tap(find.text('Thử lại'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Chưa có gợi ý nào'), findsOneWidget);
+    });
+
+    testWidgets('the mock app lists everyone who is not a friend', (
+      tester,
+    ) async {
+      await pumpSocialHub(tester);
+      await tapTab(tester, friendsTab);
+      await tester.tap(
+        find.widgetWithText(ChoiceChip, 'Người bạn có thể biết'),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Chưa có gợi ý nào'), findsNothing);
+    });
+  });
+
+  group('"Đang theo dõi" feed tab', () {
+    Future<void> openFollowing(WidgetTester tester) async {
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Đang theo dõi'));
+      await tester.pumpAndSettle();
+    }
+
+    PostPage page(List<Post> posts, {String? next}) =>
+        PostPage(posts: posts, nextCursor: next);
+
+    testWidgets('opens the tab from the server, not from the loaded posts', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..followingPages = [
+          page([_post('f1', 'Bài của người tôi theo dõi')]),
+        ];
+      await _pump(tester, api);
+      expect(find.text('Bài trên bảng tin'), findsOneWidget);
+
+      await openFollowing(tester);
+
+      expect(api.feedFilterCalls, ['following:']);
+      expect(find.text('Bài của người tôi theo dõi'), findsOneWidget);
+      expect(find.text('Bài trên bảng tin'), findsNothing);
+    });
+
+    testWidgets('going back to "Dành cho bạn" shows the whole feed again', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..followingPages = [
+          page([_post('f1', 'Bài của người tôi theo dõi')]),
+        ];
+      await _pump(tester, api);
+      await openFollowing(tester);
+
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Dành cho bạn'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Bài trên bảng tin'), findsOneWidget);
+      // the followed post is part of the feed too (older, so further down)
+      await tester.scrollUntilVisible(
+        find.text('Bài của người tôi theo dõi'),
+        300,
+        scrollable: visibleVerticalScrollable,
+      );
+      expect(find.text('Bài của người tôi theo dõi'), findsOneWidget);
+    });
+
+    testWidgets('an empty tab says so', (tester) async {
+      final api = _FakeRemoteApi(sessionUser: _me)..followingPages = [page([])];
+      await _pump(tester, api);
+
+      await openFollowing(tester);
+
+      expect(
+        find.text('Chưa có bài viết từ những người bạn theo dõi'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a failure shows the reason and can be retried', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..listError = const ApiException(
+          code: 'network_error',
+          message: 'Không thể kết nối tới máy chủ',
+        );
+      await _pump(tester, api);
+      await openFollowing(tester);
+      expect(find.text('Không thể kết nối tới máy chủ'), findsOneWidget);
+
+      api
+        ..listError = null
+        ..followingPages = [
+          page([_post('f1', 'Đã tải được')]),
+        ];
+      await tester.tap(find.text('Thử lại'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Đã tải được'), findsOneWidget);
+      expect(api.feedFilterCalls, ['following:', 'following:']);
+    });
+
+    testWidgets('scrolling to the end loads the next page of the tab', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(800, 1200);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..followingPages = [
+          page([
+            for (var i = 0; i < 12; i++) _post('f${100 - i}', 'Theo dõi $i'),
+          ], next: 'c1'),
+          page([_post('f1', 'Trang hai')]),
+        ];
+      await _pump(tester, api);
+      await openFollowing(tester);
+
+      await tester.fling(
+        visibleVerticalScrollable,
+        const Offset(0, -3000),
+        3000,
+      );
+      await tester.pumpAndSettle();
+      await tester.fling(
+        visibleVerticalScrollable,
+        const Offset(0, -3000),
+        3000,
+      );
+      await tester.pumpAndSettle();
+
+      expect(api.feedFilterCalls, ['following:', 'following:c1']);
+    });
+
+    testWidgets('pulling to refresh reloads the tab', (tester) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..followingPages = [
+          page([_post('f1', 'Bài của người tôi theo dõi')]),
+        ];
+      await _pump(tester, api);
+      await openFollowing(tester);
+
+      await tester.fling(visibleVerticalScrollable, const Offset(0, 500), 1000);
+      await tester.pumpAndSettle();
+
+      expect(api.feedFilterCalls, ['following:', 'following:']);
+      expect(find.text('Bài của người tôi theo dõi'), findsOneWidget);
+    });
+
+    testWidgets('the mock app keeps filtering the posts it has', (
+      tester,
+    ) async {
+      await pumpSocialHub(tester);
+
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Đang theo dõi'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Chưa có bài viết từ những người bạn theo dõi'),
+        findsNothing,
+      );
     });
   });
 

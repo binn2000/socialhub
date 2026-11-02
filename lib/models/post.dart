@@ -5,6 +5,7 @@ class Post {
   final UserModel author;
   final String content;
   final String? imageUrl;
+  final List<String> imageUrls;
   final String? imageId;
   final String? feeling;
   final String? privacy;
@@ -21,6 +22,7 @@ class Post {
     required this.author,
     required this.content,
     this.imageUrl,
+    this.imageUrls = const [],
     this.imageId,
     this.feeling,
     this.privacy,
@@ -33,6 +35,13 @@ class Post {
     this.videoDuration,
   });
 
+  /// All image URLs associated with this post.
+  List<String> get allImages {
+    if (imageUrls.isNotEmpty) return imageUrls;
+    if (imageUrl != null && imageUrl!.isNotEmpty) return [imageUrl!];
+    return const [];
+  }
+
   /// Returns a copy with the given fields replaced. Only the fields the app
   /// changes today are listed, like UserModel.copyWith.
   Post copyWith({
@@ -42,12 +51,14 @@ class Post {
     int? shares,
     bool? isLiked,
     String? privacy,
+    List<String>? imageUrls,
   }) {
     return Post(
       id: id,
       author: author ?? this.author,
       content: content,
       imageUrl: imageUrl,
+      imageUrls: imageUrls ?? this.imageUrls,
       imageId: imageId,
       feeling: feeling,
       privacy: privacy ?? this.privacy,

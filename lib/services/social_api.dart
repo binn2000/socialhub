@@ -51,6 +51,15 @@ class PostPage {
   });
 }
 
+/// What polling an open chat returns: new messages and whether the other
+/// person is typing right now.
+class MessagePoll {
+  final List<ChatMessage> messages;
+  final bool otherTyping;
+
+  const MessagePoll({this.messages = const [], this.otherTyping = false});
+}
+
 class NotificationPage {
   final List<SocialNotification> notifications;
   final String? nextCursor;
@@ -71,6 +80,21 @@ class UserPage {
     this.pendingIds = const {},
     this.nextCursor,
   });
+}
+
+/// One photo of a profile's "Ảnh" tab (a post can have several).
+class ProfilePhoto {
+  final String postId;
+  final String imageUrl;
+
+  const ProfilePhoto({required this.postId, required this.imageUrl});
+}
+
+class PhotoPage {
+  final List<ProfilePhoto> photos;
+  final String? nextCursor;
+
+  const PhotoPage({required this.photos, this.nextCursor});
 }
 
 /// Everything MainScreen shows, loaded in one go.
@@ -170,6 +194,10 @@ abstract class SocialApi {
   /// The next pages of the lists [load] started (server only).
   Future<PostPage> loadMoreFeed(String cursor);
   Future<PostPage> loadMoreExplore(String cursor);
+
+  /// A page of one feed tab: `friends`, `following` or `popular` (the plain
+  /// feed is [load] and [loadMoreFeed]). [cursor] is null for the first page.
+  Future<PostPage> loadFeedFilter(String filter, {String? cursor});
   Future<NotificationPage> loadMoreNotifications(String cursor);
 
   /// Users matching [query] (name or username); an empty query lists everyone.
@@ -179,7 +207,11 @@ abstract class SocialApi {
   /// returns the stored version (with the server's id and time).
   Future<Post> createPost(Post draft);
   Future<Story> createStory(Story draft);
-  Future<ChatMessage> sendMessage(String conversationId, ChatMessage draft);
+  Future<ChatMessage> sendMessage(
+    String conversationId,
+    ChatMessage draft, {
+    List<String>? attachmentPaths,
+  });
 
   Future<void> deletePost(String postId);
 
@@ -240,7 +272,7 @@ abstract class SocialApi {
 
   /// Messages newer than [afterMessageId] (oldest first), for polling an open
   /// chat. With no id, the latest messages.
-  Future<List<ChatMessage>> loadNewMessages(
+  Future<MessagePoll> loadNewMessages(
     String conversationId, {
     String? afterMessageId,
   });
@@ -256,4 +288,28 @@ abstract class SocialApi {
 
   Future<UserModel> updateProfile(UserModel user);
   Future<UserModel> uploadAvatar(String filePath);
+
+  /// Uploads the profile cover image and returns the updated user.
+  Future<UserModel> uploadCover(String filePath);
+
+  /// The photos of a user's posts, newest first, for the profile "Ảnh" tab.
+  Future<PhotoPage> loadUserPhotos(String userId, {String? cursor});
+
+  /// The friends of a user, for the profile "Bạn bè" tab.
+  Future<UserPage> loadUserFriends(String userId, {String? cursor});
+
+  /// People the user may know, most friends in common first.
+  Future<UserPage> loadSuggestions({String? cursor});
+
+  /// Follow & Unfollow.
+  Future<void> followUser(String userId);
+  Future<void> unfollowUser(String userId);
+  Future<UserPage> loadFollowers(String userId, {String? cursor});
+  Future<UserPage> loadFollowing(String userId, {String? cursor});
+
+  /// Presence & Typing.
+  Future<void> sendPresence();
+  Future<void> sendTyping(String conversationId);
+  Future<void> stopTyping(String conversationId);
+  Future<UserModel> setShowOnlineStatus(bool show);
 }

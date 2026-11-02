@@ -106,7 +106,7 @@ void main() {
           conversations: [emptyConversation],
           conversationId: emptyConversation.id,
           currentUser: currentUser,
-          onSendMessage: (_) => sendCount++,
+          onSendMessage: (_, {attachmentPaths}) => sendCount++,
         ),
       ),
     );

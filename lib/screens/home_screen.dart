@@ -50,6 +50,16 @@ class HomeScreen extends StatefulWidget {
   /// Loads the next page when the list is scrolled near its end.
   final VoidCallback? onLoadMore;
 
+  /// The "Đang theo dõi" tab from the server: which posts belong to it
+  /// (null until it was loaded), whether it is loading, the last error, how
+  /// to load it again and how to load its next page. All null/false on the
+  /// mock app, where the tab shows the posts of friends.
+  final Set<String>? followingPostIds;
+  final bool followingLoading;
+  final String? followingError;
+  final VoidCallback? onLoadFollowing;
+  final VoidCallback? onLoadMoreFollowing;
+
   const HomeScreen({
     super.key,
     required this.currentUser,
@@ -71,6 +81,11 @@ class HomeScreen extends StatefulWidget {
     this.onStoryViewed,
     this.onRefresh,
     this.onLoadMore,
+    this.followingPostIds,
+    this.followingLoading = false,
+    this.followingError,
+    this.onLoadFollowing,
+    this.onLoadMoreFollowing,
   });
 
   @override
@@ -161,6 +176,12 @@ class _HomeScreenState extends State<HomeScreen> {
       case HomeFeedFilter.forYou:
         return searched;
       case HomeFeedFilter.following:
+        if (widget.onLoadFollowing != null) {
+          final ids = widget.followingPostIds;
+          return ids == null
+              ? const []
+              : searched.where((post) => ids.contains(post.id)).toList();
+        }
         return searched
             .where(
               (post) =>
@@ -462,38 +483,42 @@ class _HomeScreenState extends State<HomeScreen> {
     return AppBar(
       centerTitle: false,
       titleSpacing: AppSpacing.lg + 4,
-      title: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Small brand mark: a rounded square with the initial.
-          Container(
-            width: 30,
-            height: 30,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: colorScheme.primary,
-              borderRadius: BorderRadius.circular(9),
-            ),
-            child: Text(
-              'S',
-              style: TextStyle(
-                color: colorScheme.onPrimary,
-                fontSize: 17,
-                fontWeight: FontWeight.w700,
-                height: 1,
+      title: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerLeft,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Small brand mark: a rounded square with the initial.
+            Container(
+              width: 30,
+              height: 30,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: colorScheme.primary,
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Text(
+                'S',
+                style: TextStyle(
+                  color: colorScheme.onPrimary,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                  height: 1,
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: 10),
-          const Text(
-            'SocialHub',
-            style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w700,
-              letterSpacing: -0.6,
+            const SizedBox(width: 10),
+            const Text(
+              'SocialHub',
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.6,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
       actions: [
         IconButton(
@@ -565,8 +590,48 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// "No posts" and "no search results" are different situations, so they
   /// get different messages.
+  bool get _onServerFollowingTab =>
+      !_isSearching &&
+      _feedFilter == HomeFeedFilter.following &&
+      widget.onLoadFollowing != null;
+
   Widget _buildEmptyState() {
     final colorScheme = Theme.of(context).colorScheme;
+    if (_onServerFollowingTab) {
+      if (widget.followingPostIds == null && widget.followingLoading) {
+        return const Padding(
+          padding: EdgeInsets.all(32),
+          child: Center(child: CircularProgressIndicator()),
+        );
+      }
+      if (widget.followingPostIds == null && widget.followingError != null) {
+        return Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                widget.followingError!,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: colorScheme.onSurfaceVariant),
+              ),
+              TextButton(
+                onPressed: widget.onLoadFollowing,
+                child: const Text('Thử lại'),
+              ),
+            ],
+          ),
+        );
+      }
+      return Padding(
+        padding: const EdgeInsets.all(32),
+        child: Text(
+          'Chưa có bài viết từ những người bạn theo dõi',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: colorScheme.onSurfaceVariant),
+        ),
+      );
+    }
     final noPostsAtAll = widget.posts.isEmpty;
     return Padding(
       padding: const EdgeInsets.all(32),
@@ -671,32 +736,42 @@ class _HomeScreenState extends State<HomeScreen> {
         AppSpacing.lg,
         0,
       ),
-      child: Row(
-        children: [
-          for (final filter in HomeFeedFilter.values)
-            Padding(
-              padding: const EdgeInsets.only(right: AppSpacing.sm),
-              child: ChoiceChip(
-                label: Text(filter.label),
-                selected: _feedFilter == filter,
-                showCheckmark: false,
-                selectedColor: palette.brand,
-                backgroundColor: palette.surface,
-                labelStyle: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: _feedFilter == filter
-                      ? Colors.white
-                      : palette.textSecondary,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            for (final filter in HomeFeedFilter.values)
+              Padding(
+                padding: const EdgeInsets.only(right: AppSpacing.sm),
+                child: ChoiceChip(
+                  label: Text(filter.label),
+                  selected: _feedFilter == filter,
+                  showCheckmark: false,
+                  selectedColor: palette.brand,
+                  backgroundColor: palette.surface,
+                  labelStyle: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: _feedFilter == filter
+                        ? Colors.white
+                        : palette.textSecondary,
+                  ),
+                  side: BorderSide(
+                    color: _feedFilter == filter
+                        ? palette.brand
+                        : palette.border,
+                  ),
+                  visualDensity: VisualDensity.compact,
+                  onSelected: (_) {
+                    setState(() => _feedFilter = filter);
+                    if (filter == HomeFeedFilter.following) {
+                      widget.onLoadFollowing?.call();
+                    }
+                  },
                 ),
-                side: BorderSide(
-                  color: _feedFilter == filter ? palette.brand : palette.border,
-                ),
-                visualDensity: VisualDensity.compact,
-                onSelected: (_) => setState(() => _feedFilter = filter),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -820,10 +895,18 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _refreshable(Widget child) {
     final onRefresh = widget.onRefresh;
     return LoadMoreListener(
-      onLoadMore: widget.onLoadMore,
+      onLoadMore: _onServerFollowingTab
+          ? widget.onLoadMoreFollowing
+          : widget.onLoadMore,
       child: onRefresh == null
           ? child
-          : RefreshIndicator(onRefresh: onRefresh, child: child),
+          : RefreshIndicator(
+              onRefresh: () async {
+                await onRefresh();
+                if (_onServerFollowingTab) widget.onLoadFollowing!();
+              },
+              child: child,
+            ),
     );
   }
 }

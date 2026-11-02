@@ -35,6 +35,7 @@ import 'package:flutter_learning/services/social_api.dart';
 import 'package:flutter_learning/services/token_store.dart';
 import 'package:flutter_learning/theme/app_theme.dart';
 import 'package:flutter_learning/widgets/bottom_nav.dart';
+import 'package:flutter_learning/widgets/follow_list_sheet.dart';
 
 /// Set with `--dart-define=API_BASE_URL=http://localhost:8000/api/v1` to use
 /// the Laravel backend. Without it the app runs on the offline mock data.
@@ -240,6 +241,8 @@ class _MainScreenState extends State<MainScreen> {
   // an open Messages screen re-reads the conversation list.
   Timer? _chatTimer;
   Timer? _conversationsTimer;
+  Timer? _presenceTimer;
+  static const _presenceHeartbeatEvery = Duration(seconds: 45);
   String? _openChatId;
   bool _pollingChat = false;
   // Messages being sent. Polling waits for them, otherwise it could return
@@ -247,6 +250,15 @@ class _MainScreenState extends State<MainScreen> {
   int _sendsInFlight = 0;
   // Bumped when the conversations change behind an open screen's back.
   final ValueNotifier<int> _chatChanges = ValueNotifier(0);
+
+  /// Whether the other person of the open chat is typing (from the poll).
+  final ValueNotifier<bool> _partnerTyping = ValueNotifier(false);
+
+  // The "Đang theo dõi" feed tab, loaded from the server when it is opened.
+  Set<String>? _followingPostIds;
+  String? _followingCursor;
+  bool _followingLoading = false;
+  String? _followingError;
 
   int get _unreadNotificationCount =>
       _notifications.where((notification) => !notification.isRead).length;
@@ -261,7 +273,18 @@ class _MainScreenState extends State<MainScreen> {
       _loading = true;
       _load();
       _startPush();
+      _startPresenceHeartbeat();
     }
+  }
+
+  void _startPresenceHeartbeat() {
+    _presenceTimer?.cancel();
+    widget.api.sendPresence().ignore();
+    _presenceTimer = Timer.periodic(_presenceHeartbeatEvery, (_) {
+      if (mounted) {
+        widget.api.sendPresence().ignore();
+      }
+    });
   }
 
   final List<StreamSubscription<Object?>> _pushSubscriptions = [];
@@ -325,9 +348,11 @@ class _MainScreenState extends State<MainScreen> {
     for (final subscription in _pushSubscriptions) {
       subscription.cancel();
     }
+    _presenceTimer?.cancel();
     _chatTimer?.cancel();
     _conversationsTimer?.cancel();
     _chatChanges.dispose();
+    _partnerTyping.dispose();
     super.dispose();
   }
 
@@ -409,6 +434,41 @@ class _MainScreenState extends State<MainScreen> {
           _feedCursor = page.nextCursor;
         });
       });
+
+  /// Loads the "Đang theo dõi" tab from the server: the first page when the
+  /// tab is opened (or refreshed), the next one when scrolling to the end.
+  /// The posts join [_posts] like any other, so likes and comments stay in
+  /// step; [_followingPostIds] says which of them belong to this tab.
+  Future<void> _loadFollowing({bool more = false}) async {
+    if (_followingLoading) return;
+    final cursor = more ? _followingCursor : null;
+    if (more && cursor == null) return;
+    setState(() {
+      _followingLoading = true;
+      _followingError = null;
+    });
+    try {
+      final page = await _guard(
+        () => widget.api.loadFeedFilter('following', cursor: cursor),
+      );
+      if (!mounted) return;
+      final ids = {for (final post in page.posts) post.id};
+      setState(() {
+        _addPosts(page);
+        // The tab is part of the feed, so Home lists these posts too.
+        _feedPostIds = {...?_feedPostIds, ...ids};
+        _followingPostIds = more ? {...?_followingPostIds, ...ids} : ids;
+        _followingCursor = page.nextCursor;
+        _followingLoading = false;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _followingLoading = false;
+        if (!error.isUnauthenticated) _followingError = error.displayMessage;
+      });
+    }
+  }
 
   Future<void> _loadMoreExplore() =>
       _loadMore('explore', _exploreCursor, (cursor, generation) async {
@@ -725,6 +785,11 @@ class _MainScreenState extends State<MainScreen> {
       MaterialPageRoute(
         builder: (_) => UserProfileScreen(
           user: user,
+          onOpenProfile: _openProfile,
+          onLoadPhotos: (userId, cursor) =>
+              _guard(() => widget.api.loadUserPhotos(userId, cursor: cursor)),
+          onLoadFriends: (userId, cursor) =>
+              _guard(() => widget.api.loadUserFriends(userId, cursor: cursor)),
           load: () => _guard(() => widget.api.loadProfile(user.id)),
           onSendRequest: (userId) => _guard(() async {
             await widget.api.sendFriendRequest(userId);
@@ -759,6 +824,51 @@ class _MainScreenState extends State<MainScreen> {
               _report('user', user.id, reason, details),
           onBlock: _blockUser,
           onUnblock: _unblockUser,
+          onFollow: widget.api.isRemote
+              ? (userId) => _guard(() async {
+                  await widget.api.followUser(userId);
+                  if (mounted) {
+                    setState(() {
+                      _replaceUser(
+                        userId,
+                        (u) => u.copyWith(
+                          isFollowing: true,
+                          followersCount: u.followersCount + 1,
+                        ),
+                      );
+                    });
+                  }
+                })
+              : null,
+          onUnfollow: widget.api.isRemote
+              ? (userId) => _guard(() async {
+                  await widget.api.unfollowUser(userId);
+                  if (mounted) {
+                    setState(() {
+                      _replaceUser(
+                        userId,
+                        (u) => u.copyWith(
+                          isFollowing: false,
+                          followersCount: (u.followersCount - 1).clamp(
+                            0,
+                            999999,
+                          ),
+                        ),
+                      );
+                    });
+                  }
+                })
+              : null,
+          onLoadFollowers: widget.api.isRemote
+              ? (userId, cursor) => _guard(
+                  () => widget.api.loadFollowers(userId, cursor: cursor),
+                )
+              : null,
+          onLoadFollowing: widget.api.isRemote
+              ? (userId, cursor) => _guard(
+                  () => widget.api.loadFollowing(userId, cursor: cursor),
+                )
+              : null,
           onUnfriend: (userId) => _guard(() async {
             await widget.api.unfriend(userId);
             if (mounted) {
@@ -985,6 +1095,7 @@ class _MainScreenState extends State<MainScreen> {
           onStartConversation: widget.api.isRemote ? _startConversation : null,
           currentUser: _currentUser,
           onSendMessage: _handleSendMessage,
+          onPickAttachment: widget.api.isRemote ? _pickPhoto : null,
           onSelectDesktopConversation: (conversation) {
             final hadUnread = conversation.unreadCount > 0;
             _markConversationRead(conversation.id);
@@ -1049,10 +1160,12 @@ class _MainScreenState extends State<MainScreen> {
 
     _pollingChat = true;
     try {
-      final incoming = await _guard(
+      final poll = await _guard(
         () => widget.api.loadNewMessages(id, afterMessageId: after),
       );
       if (!mounted || _openChatId != id || _sendsInFlight > 0) return;
+      _partnerTyping.value = poll.otherTyping;
+      final incoming = poll.messages;
 
       final known = _findConversation(id)!.messages.map((m) => m.id).toSet();
       final fresh = incoming.where((m) => !known.contains(m.id)).toList();
@@ -1203,12 +1316,30 @@ class _MainScreenState extends State<MainScreen> {
       await Navigator.push<void>(
         context,
         MaterialPageRoute(
-          builder: (_) => ChatScreen(
-            conversations: _conversations,
-            conversationId: conversation.id,
-            currentUser: _currentUser,
-            onSendMessage: (text) => _handleSendMessage(conversation.id, text),
-            refresh: widget.api.isRemote ? _chatChanges : null,
+          builder: (_) => ValueListenableBuilder<bool>(
+            valueListenable: _partnerTyping,
+            builder: (context, partnerTyping, _) => ChatScreen(
+              isPartnerTyping: partnerTyping,
+              conversations: _conversations,
+              conversationId: conversation.id,
+              currentUser: _currentUser,
+              onSendMessage: (text, {attachmentPaths}) => _handleSendMessage(
+                conversation.id,
+                text,
+                attachmentPaths: attachmentPaths,
+              ),
+              onPickAttachment: widget.api.isRemote ? _pickPhoto : null,
+              onTyping: widget.api.isRemote
+                  ? (typing) {
+                      if (typing) {
+                        widget.api.sendTyping(conversation.id).ignore();
+                      } else {
+                        widget.api.stopTyping(conversation.id).ignore();
+                      }
+                    }
+                  : null,
+              refresh: widget.api.isRemote ? _chatChanges : null,
+            ),
           ),
         ),
       );
@@ -1216,22 +1347,48 @@ class _MainScreenState extends State<MainScreen> {
       _chatTimer?.cancel();
       _chatTimer = null;
       _openChatId = null;
+      _partnerTyping.value = false;
     }
   }
 
-  void _handleSendMessage(String conversationId, String text) {
+  void _handleSendMessage(
+    String conversationId,
+    String text, {
+    List<String>? attachmentPaths,
+  }) {
+    final attachments = [
+      if (attachmentPaths != null)
+        for (final p in attachmentPaths)
+          ChatAttachment(
+            id: 'temp_${DateTime.now().millisecondsSinceEpoch}_${p.hashCode}',
+            type:
+                p.endsWith('.jpg') || p.endsWith('.png') || p.endsWith('.jpeg')
+                ? 'image'
+                : 'file',
+            url: p,
+            name: p.split('/').last,
+            mimeType: p.endsWith('.png')
+                ? 'image/png'
+                : (p.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg'),
+            sizeBytes: 1024,
+          ),
+    ];
+
     final message = ChatMessage(
       id: 'message_${DateTime.now().millisecondsSinceEpoch}',
       senderId: _currentUser.id,
       text: text,
       time: 'Vừa xong',
+      attachments: attachments,
     );
 
     _updateConversation(conversationId, (conversation) {
       return _copyConversation(
         conversation,
         messages: [...conversation.messages, message],
-        lastMessage: message.text,
+        lastMessage: message.text.isNotEmpty
+            ? message.text
+            : (attachments.isNotEmpty ? '[Đính kèm]' : ''),
         time: message.time,
         unreadCount: 0,
       );
@@ -1240,7 +1397,11 @@ class _MainScreenState extends State<MainScreen> {
     _sendsInFlight++;
     _sync(
       () async {
-        final saved = await widget.api.sendMessage(conversationId, message);
+        final saved = await widget.api.sendMessage(
+          conversationId,
+          message,
+          attachmentPaths: attachmentPaths,
+        );
         if (!mounted || saved.id == message.id) return;
         _updateConversation(conversationId, (conversation) {
           return _copyConversation(
@@ -1351,6 +1512,19 @@ class _MainScreenState extends State<MainScreen> {
     return url;
   }
 
+  /// Picks a photo and uploads it as the profile cover (Profile tab).
+  Future<void> _changeCover() async {
+    final path = await _pickPhoto();
+    if (path == null) return;
+    await _sync(() async {
+      final saved = await widget.api.uploadCover(path);
+      if (!mounted) return;
+      setState(
+        () => _applyUser(_currentUser.copyWith(coverUrl: saved.coverUrl)),
+      );
+    });
+  }
+
   /// Deletes the account, then leaves every pushed screen and shows sign-in.
   /// A refused password throws to the dialog that asked.
   Future<void> _deleteAccount(String password) async {
@@ -1384,6 +1558,7 @@ class _MainScreenState extends State<MainScreen> {
       MaterialPageRoute(
         builder: (_) => EditProfileScreen(
           user: _currentUser,
+          editAbout: widget.api.isRemote,
           onChangeAvatar: widget.api.isRemote ? _changeAvatar : null,
           onDeleteAccount: widget.api.isRemote ? _deleteAccount : null,
           onOpenBlocked: widget.api.isRemote ? _openBlockedUsers : null,
@@ -1391,6 +1566,11 @@ class _MainScreenState extends State<MainScreen> {
       ),
     );
     if (updatedUser == null) return;
+
+    if (widget.api.isRemote &&
+        updatedUser.showOnlineStatus != previousUser.showOnlineStatus) {
+      widget.api.setShowOnlineStatus(updatedUser.showOnlineStatus).ignore();
+    }
 
     setState(() => _applyUser(updatedUser));
     _sync(() async {
@@ -1523,6 +1703,13 @@ class _MainScreenState extends State<MainScreen> {
         onStoryViewed: _handleStoryViewed,
         onRefresh: widget.api.isRemote ? _refreshAll : null,
         onLoadMore: widget.api.isRemote ? _loadMoreFeed : null,
+        followingPostIds: widget.api.isRemote ? _followingPostIds : null,
+        followingLoading: _followingLoading,
+        followingError: _followingError,
+        onLoadFollowing: widget.api.isRemote ? _loadFollowing : null,
+        onLoadMoreFollowing: widget.api.isRemote
+            ? () => _loadFollowing(more: true)
+            : null,
       ),
       ExploreScreen(
         posts: explorePosts,
@@ -1554,6 +1741,10 @@ class _MainScreenState extends State<MainScreen> {
               )
             : null,
         onLoadMore: widget.api.isRemote ? _loadMoreUsers : null,
+        onLoadSuggestions: widget.api.isRemote
+            ? (cursor) =>
+                  _guard(() => widget.api.loadSuggestions(cursor: cursor))
+            : null,
       ),
       CreatePostScreen(
         currentUser: _currentUser,
@@ -1574,6 +1765,37 @@ class _MainScreenState extends State<MainScreen> {
             .where((u) => u.isFriend && u.id != _currentUser.id)
             .toList(),
         onOpenProfile: widget.api.isRemote ? _openProfile : null,
+        loadPhotos: widget.api.isRemote
+            ? (cursor) => _guard(
+                () =>
+                    widget.api.loadUserPhotos(_currentUser.id, cursor: cursor),
+              )
+            : null,
+        loadFriends: widget.api.isRemote
+            ? (cursor) => _guard(
+                () =>
+                    widget.api.loadUserFriends(_currentUser.id, cursor: cursor),
+              )
+            : null,
+        onChangeCover: widget.api.isRemote ? _changeCover : null,
+        onOpenFollowers: widget.api.isRemote
+            ? () => showFollowListSheet(
+                context,
+                title: 'Người theo dõi',
+                loadUsers: (cursor) =>
+                    widget.api.loadFollowers(_currentUser.id, cursor: cursor),
+                onOpenProfile: _openProfile,
+              )
+            : null,
+        onOpenFollowing: widget.api.isRemote
+            ? () => showFollowListSheet(
+                context,
+                title: 'Đang theo dõi',
+                loadUsers: (cursor) =>
+                    widget.api.loadFollowing(_currentUser.id, cursor: cursor),
+                onOpenProfile: _openProfile,
+              )
+            : null,
         onEditProfile: _openEditProfile,
         onOpenSaved: _openSavedPosts,
         onVerifyEmail: widget.api.isRemote && !_currentUser.emailVerified

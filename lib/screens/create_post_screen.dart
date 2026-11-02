@@ -49,7 +49,11 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
   String? _statusMessage;
   bool _statusIsError = false;
 
-  bool get _hasImage => _selectedImage != null || _photoPath != null;
+  /// Multiple photo paths when picked on a real device.
+  final List<String> _photoPaths = [];
+
+  bool get _hasImage =>
+      _selectedImage != null || _photoPath != null || _photoPaths.isNotEmpty;
 
   @override
   void dispose() {
@@ -72,7 +76,12 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
   Future<void> _pickPhoto() async {
     final path = await widget.onPickPhoto!();
     if (path == null || !mounted) return;
-    setState(() => _photoPath = path);
+    setState(() {
+      _photoPath = path;
+      if (!_photoPaths.contains(path)) {
+        if (_photoPaths.length < 10) _photoPaths.add(path);
+      }
+    });
   }
 
   void _openMockImagePicker() {
@@ -135,11 +144,14 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
       _showValidationMessage();
       return;
     }
+    final primaryPath = _photoPaths.isNotEmpty
+        ? _photoPaths.first
+        : (_photoPath ?? _selectedImage?.assetPath);
     widget.onPostCreated(
       text,
       _selectedFeeling,
       _selectedPrivacy,
-      _photoPath ?? _selectedImage?.assetPath,
+      primaryPath,
       _selectedImage?.id,
     );
     // This tab stays alive in MainScreen's IndexedStack, so start a fresh
@@ -154,6 +166,7 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
       _selectedPrivacy = _defaultPrivacy;
       _selectedImage = null;
       _photoPath = null;
+      _photoPaths.clear();
       _statusMessage = statusMessage;
       _statusIsError = false;
     });
@@ -318,23 +331,34 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
                       color: Theme.of(context).colorScheme.primary,
                     ),
                     const SizedBox(width: 8),
-                    const Text(
-                      'Thêm ảnh',
-                      style: TextStyle(fontWeight: FontWeight.w600),
+                    Text(
+                      _photoPaths.length > 1
+                          ? 'Đã chọn ${_photoPaths.length} ảnh'
+                          : 'Thêm ảnh',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                     const Spacer(),
                     if (widget.onPickPhoto != null) ...[
-                      if (_photoPath != null)
+                      if (_photoPath != null || _photoPaths.isNotEmpty) ...[
                         TextButton(
-                          onPressed: () => setState(() => _photoPath = null),
+                          onPressed: () => setState(() {
+                            _photoPath = null;
+                            _photoPaths.clear();
+                          }),
                           child: const Text('Xóa ảnh'),
                         ),
-                      TextButton(
-                        onPressed: _pickPhoto,
-                        child: Text(
-                          _photoPath == null ? 'Chọn ảnh' : 'Đổi ảnh',
+                        TextButton(
+                          onPressed: _pickPhoto,
+                          child: Text(
+                            _photoPaths.length > 1 ? '+ Thêm ảnh' : 'Đổi ảnh',
+                          ),
                         ),
-                      ),
+                      ],
+                      if (_photoPath == null && _photoPaths.isEmpty)
+                        TextButton(
+                          onPressed: _pickPhoto,
+                          child: const Text('Chọn ảnh'),
+                        ),
                     ] else
                       TextButton(
                         onPressed: _openMockImagePicker,
@@ -349,7 +373,59 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
                 const SizedBox(height: 12),
                 MockImagePreview(image: _selectedImage!, size: 220),
               ],
-              if (_photoPath != null) ...[
+              if (_photoPaths.length > 1) ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                  height: 120,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: _photoPaths.length,
+                    separatorBuilder: (_, _) => const SizedBox(width: 8),
+                    itemBuilder: (context, idx) {
+                      final path = _photoPaths[idx];
+                      return Stack(
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: Image.file(
+                              File(path),
+                              width: 120,
+                              height: 120,
+                              fit: BoxFit.cover,
+                            ),
+                          ),
+                          Positioned(
+                            top: 4,
+                            right: 4,
+                            child: InkWell(
+                              onTap: () => setState(() {
+                                _photoPaths.removeAt(idx);
+                                if (_photoPath == path) {
+                                  _photoPath = _photoPaths.isNotEmpty
+                                      ? _photoPaths.first
+                                      : null;
+                                }
+                              }),
+                              child: Container(
+                                padding: const EdgeInsets.all(4),
+                                decoration: const BoxDecoration(
+                                  color: Colors.black54,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(
+                                  Icons.close_rounded,
+                                  color: Colors.white,
+                                  size: 16,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              ] else if (_photoPath != null) ...[
                 const SizedBox(height: 12),
                 _PhotoPreview(path: _photoPath!, height: 220),
               ],

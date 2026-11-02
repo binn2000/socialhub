@@ -9,7 +9,9 @@ import 'package:flutter_learning/screens/messages_screen.dart';
 import 'package:flutter_learning/screens/notifications_screen.dart';
 import 'package:flutter_learning/screens/profile_screen.dart';
 import 'package:flutter_learning/screens/create_post_screen.dart';
+import 'package:flutter_learning/models/post.dart';
 import 'package:flutter_learning/widgets/bottom_nav.dart';
+import 'package:flutter_learning/widgets/mock_image.dart';
 
 import 'test_helpers.dart';
 
@@ -208,6 +210,123 @@ void main() {
 
       final home = tester.element(find.byType(HomeScreen));
       expect(Theme.of(home).brightness, Brightness.light);
+    });
+  });
+
+  group('Modern Premium additions (4.2 - 4.7)', () {
+    testWidgets('Home feed filter tabs filter posts by category', (
+      tester,
+    ) async {
+      await pumpSocialHub(tester);
+
+      expect(find.text('Dành cho bạn'), findsOneWidget);
+      expect(find.text('Đang theo dõi'), findsOneWidget);
+      expect(find.text('Đa phương tiện'), findsOneWidget);
+
+      await tester.tap(find.text('Đa phương tiện'));
+      await tester.pumpAndSettle();
+      expect(find.text(mockPosts.first.content), findsOneWidget);
+    });
+
+    testWidgets('Video PostMedia renders play button and duration badge', (
+      tester,
+    ) async {
+      final videoPost = Post(
+        id: 'video_1',
+        author: currentUser,
+        content: 'Video demo',
+        imageUrl: 'assets/placeholder.png',
+        createdAt: 'Vừa xong',
+        likes: 10,
+        comments: 2,
+        shares: 1,
+        isLiked: false,
+        isVideo: true,
+        videoDuration: '1:24',
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: PostMedia(post: videoPost)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
+      expect(find.text('1:24'), findsOneWidget);
+    });
+
+    testWidgets(
+      'Profile tabs switch between Bài viết, Giới thiệu, Ảnh, Bạn bè',
+      (tester) async {
+        await pumpSocialHub(tester);
+        await tapTab(tester, profileTab);
+
+        await tester.tap(find.widgetWithText(ChoiceChip, 'Giới thiệu'));
+        await tester.pumpAndSettle();
+        expect(find.text('Thông tin cá nhân'), findsOneWidget);
+
+        await tester.tap(find.widgetWithText(ChoiceChip, 'Ảnh'));
+        await tester.pumpAndSettle();
+        expect(find.byType(PostMedia), findsWidgets);
+
+        await tester.tap(find.widgetWithText(ChoiceChip, 'Bạn bè'));
+        await tester.pumpAndSettle();
+        expect(find.text('Minh Ánh'), findsOneWidget);
+      },
+    );
+
+    testWidgets('Friends category filter separates friends and suggestions', (
+      tester,
+    ) async {
+      await pumpSocialHub(tester);
+      await tapTab(tester, friendsTab);
+
+      await tester.tap(
+        find.widgetWithText(ChoiceChip, 'Người bạn có thể biết'),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Bảo Trâm'), findsOneWidget);
+      expect(find.text('Minh Ánh'), findsNothing);
+
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Danh sách bạn bè'));
+      await tester.pumpAndSettle();
+      expect(find.text('Minh Ánh'), findsOneWidget);
+      expect(find.text('Bảo Trâm'), findsNothing);
+    });
+
+    testWidgets('Desktop Messenger renders 2-column sidebar + chat view', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(1200, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      await pumpSocialHub(tester);
+      await openMessagesFromHome(tester);
+
+      // Both the conversation list and the embedded ChatScreen are on screen.
+      expect(find.byType(MessagesScreen), findsOneWidget);
+      expect(find.byType(ChatScreen), findsOneWidget);
+    });
+
+    testWidgets('Notifications filter chips filter by type', (tester) async {
+      await pumpSocialHub(tester);
+      await tapTab(tester, notificationsTab);
+
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Kết bạn'));
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('đã gửi lời mời kết bạn', findRichText: true),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('đã thích bài viết của bạn', findRichText: true),
+        findsNothing,
+      );
     });
   });
 }

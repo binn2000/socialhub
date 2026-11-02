@@ -7,6 +7,7 @@ class UserAvatar extends StatelessWidget {
   final double radius;
   final bool showBorder;
   final List<Color>? borderColors;
+  final bool isOnline;
 
   const UserAvatar({
     super.key,
@@ -14,6 +15,7 @@ class UserAvatar extends StatelessWidget {
     this.radius = 24,
     this.showBorder = false,
     this.borderColors,
+    this.isOnline = false,
   });
 
   @override
@@ -49,21 +51,45 @@ class UserAvatar extends StatelessWidget {
           : fallback,
     );
 
-    if (!showBorder) {
-      return avatar;
-    }
+    final widget_ = !showBorder
+        ? avatar
+        : Container(
+            padding: const EdgeInsets.all(2.5),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: (borderColors != null && borderColors!.isNotEmpty)
+                    ? (borderColors!.first == borderColors!.last
+                          ? borderColors!.first
+                          : palette.brand)
+                    : palette.brand,
+                width: 2,
+              ),
+            ),
+            child: avatar,
+          );
 
-    final ringColor = (borderColors != null && borderColors!.isNotEmpty)
-        ? borderColors!.first
-        : palette.brand;
+    if (!isOnline) return widget_;
 
-    return Container(
-      padding: const EdgeInsets.all(2.5),
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: ringColor, width: 2),
-      ),
-      child: avatar,
+    final badgeRadius = (radius * 0.28).clamp(4.0, 8.0);
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        widget_,
+        Positioned(
+          right: 0,
+          bottom: 0,
+          child: Container(
+            width: badgeRadius * 2,
+            height: badgeRadius * 2,
+            decoration: BoxDecoration(
+              color: palette.success,
+              shape: BoxShape.circle,
+              border: Border.all(color: Theme.of(context).cardColor, width: 2),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

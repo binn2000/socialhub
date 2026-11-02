@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_learning/models/message.dart';
 import 'package:flutter_learning/models/post.dart';
 import 'package:flutter_learning/models/story.dart';
+import 'package:flutter_learning/models/user.dart';
 import 'package:flutter_learning/models/user_profile.dart';
 import 'package:flutter_learning/services/http_social_api.dart';
 import 'package:flutter_learning/services/social_api.dart';
@@ -720,13 +721,64 @@ void main() {
       dio: Dio()..httpClientAdapter = adapter2,
     );
 
-    final messages = await polled.loadNewMessages('c1', afterMessageId: 'm1');
+    final messages = (await polled.loadNewMessages(
+      'c1',
+      afterMessageId: 'm1',
+    )).messages;
 
     expect(messages.map((x) => x.id), ['m2', 'm3', 'm4']);
     expect(adapter2.queries, [
       {'after': 'm1', 'limit': 100},
       {'after': 'm3', 'limit': 100},
     ]);
+  });
+
+  test('polling reports whether the other person is typing', () async {
+    adapter.routes['GET /conversations/c1/messages'] = (
+      200,
+      {
+        'data': [],
+        'meta': {'nextCursor': null, 'hasMore': false, 'otherTyping': true},
+      },
+    );
+    await tokens.write('t');
+
+    final typing = await api.loadNewMessages('c1', afterMessageId: 'm1');
+    adapter.routes['GET /conversations/c1/messages'] = (
+      200,
+      {
+        'data': [],
+        'meta': {'nextCursor': null, 'hasMore': false},
+      },
+    );
+    final quiet = await api.loadNewMessages('c1', afterMessageId: 'm1');
+
+    expect(typing.otherTyping, isTrue);
+    expect(typing.messages, isEmpty);
+    expect(quiet.otherTyping, isFalse); // an old server says nothing
+  });
+
+  test('a feed tab is asked for by name and cursor', () async {
+    adapter.routes['GET /feed'] = (
+      200,
+      {
+        'data': [_post('p1')],
+        'meta': {'nextCursor': 'next', 'hasMore': true},
+      },
+    );
+    await tokens.write('t');
+
+    final first = await api.loadFeedFilter('following');
+    await api.loadFeedFilter('following', cursor: 'abc');
+
+    final requests = adapter.requests.where((r) => r.path == '/feed').toList();
+    expect(requests.first.queryParameters, {
+      'limit': 30,
+      'filter': 'following',
+    });
+    expect(requests.last.queryParameters['cursor'], 'abc');
+    expect(first.posts.single.id, 'p1');
+    expect(first.nextCursor, 'next');
   });
 
   test('polling without an id loads the latest messages', () async {
@@ -750,7 +802,7 @@ void main() {
       ]),
     );
 
-    final messages = await api.loadNewMessages('c1');
+    final messages = (await api.loadNewMessages('c1')).messages;
 
     expect(messages.map((x) => x.id), ['m1', 'm2']);
     expect(
@@ -948,7 +1000,7 @@ void main() {
     expect(list.single.user.name, 'Lan Hương');
   });
 
-  test('updateProfile sends name and bio', () async {
+  test('updateProfile sends name, bio and the About fields', () async {
     adapter.routes['PATCH /me'] = (
       200,
       {
@@ -958,14 +1010,101 @@ void main() {
     final me = await _signedInUser(api, adapter, tokens);
 
     final updated = await api.updateProfile(
-      me.copyWith(name: 'Tên mới', bio: 'Bio mới'),
+      me.copyWith(
+        name: 'Tên mới',
+        bio: 'Bio mới',
+        about: const UserAbout(
+          location: ' Hà Nội ',
+          website: 'https://example.com',
+          birthday: '1998-05-17',
+        ),
+      ),
     );
 
     expect(adapter.last('PATCH /me').data, {
       'name': 'Tên mới',
       'bio': 'Bio mới',
+      'location': 'Hà Nội',
+      'hometown': null, // empty means "clear it"
+      'workplace': null,
+      'education': null,
+      'website': 'https://example.com',
+      'birthday': '1998-05-17',
     });
     expect(updated.name, 'Tên mới');
+  });
+
+  test(
+    'the cover is uploaded as multipart and comes back on the user',
+    () async {
+      final file = File('${Directory.systemTemp.path}/cover_test.jpg')
+        ..writeAsBytesSync([1, 2, 3]);
+      addTearDown(file.deleteSync);
+      adapter.routes['POST /me/cover'] = (
+        200,
+        {
+          'data': {
+            ..._me(),
+            'coverUrl': 'http://localhost:8000/storage/covers/c.jpg',
+          },
+        },
+      );
+      await tokens.write('t');
+
+      final user = await api.uploadCover(file.path);
+
+      final data = adapter.last('POST /me/cover').data as FormData;
+      expect(data.files.single.key, 'cover');
+      expect(user.coverUrl, 'http://10.0.2.2:8000/storage/covers/c.jpg');
+    },
+  );
+
+  test('photos, friends and suggestions use the contract paths', () async {
+    adapter.routes['GET /users/u2/photos'] = (
+      200,
+      {
+        'data': [
+          {
+            'postId': 'p1',
+            'imageUrl': 'http://localhost:8000/storage/posts/a.jpg',
+            'createdAt': '2026-10-30T00:00:00Z',
+          },
+        ],
+        'meta': {'nextCursor': 'next', 'hasMore': true},
+      },
+    );
+    final friend = {
+      ..._summary('u3', 'Bạn của Lan'),
+      'mutualFriendsCount': 2,
+      'friendship': {'status': 'pending_outgoing', 'requestId': 'r1'},
+    };
+    adapter.routes['GET /users/u2/friends'] = (200, _page([friend]));
+    adapter.routes['GET /users/suggestions'] = (200, _page([friend]));
+    await tokens.write('t');
+
+    final photos = await api.loadUserPhotos('u2', cursor: 'abc');
+    final friends = await api.loadUserFriends('u2');
+    final suggestions = await api.loadSuggestions(cursor: 'zzz');
+
+    expect(photos.photos.single.postId, 'p1');
+    expect(
+      photos.photos.single.imageUrl,
+      'http://10.0.2.2:8000/storage/posts/a.jpg',
+    );
+    expect(photos.nextCursor, 'next');
+    expect(
+      adapter.last('GET /users/u2/photos').queryParameters['cursor'],
+      'abc',
+    );
+    expect(friends.users.single.name, 'Bạn của Lan');
+    expect(friends.users.single.mutualFriends, 2);
+    expect(friends.pendingIds, {'u3'});
+    expect(friends.nextCursor, isNull);
+    expect(suggestions.users, hasLength(1));
+    expect(
+      adapter.last('GET /users/suggestions').queryParameters['cursor'],
+      'zzz',
+    );
   });
 }
 

@@ -4,6 +4,7 @@ import 'package:flutter_learning/models/user_profile.dart';
 import 'package:flutter_learning/screens/profile_screen.dart';
 import 'package:flutter_learning/services/social_api.dart';
 import 'package:flutter_learning/theme/app_tokens.dart';
+import 'package:flutter_learning/widgets/follow_list_sheet.dart';
 import 'package:flutter_learning/widgets/report_sheet.dart';
 import 'package:flutter_learning/widgets/skeleton.dart';
 
@@ -27,8 +28,29 @@ class UserProfileScreen extends StatefulWidget {
   final Future<void> Function(UserModel user) onBlock;
   final Future<void> Function(String userId) onUnblock;
 
+  /// Server lists for the profile's "Ảnh" and "Bạn bè" tabs, and opening a
+  /// friend's profile from there. Null on the mock app.
+  final Future<PhotoPage> Function(String userId, String? cursor)? onLoadPhotos;
+  final Future<UserPage> Function(String userId, String? cursor)? onLoadFriends;
+  final ValueChanged<UserModel>? onOpenProfile;
+
+  /// Follow/unfollow and follow lists.
+  final Future<void> Function(String userId)? onFollow;
+  final Future<void> Function(String userId)? onUnfollow;
+  final Future<UserPage> Function(String userId, String? cursor)?
+  onLoadFollowers;
+  final Future<UserPage> Function(String userId, String? cursor)?
+  onLoadFollowing;
+
   const UserProfileScreen({
     super.key,
+    this.onLoadPhotos,
+    this.onLoadFriends,
+    this.onOpenProfile,
+    this.onFollow,
+    this.onUnfollow,
+    this.onLoadFollowers,
+    this.onLoadFollowing,
     required this.user,
     required this.load,
     required this.onSendRequest,
@@ -150,31 +172,68 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     final requestId = profile.requestId;
     final colorScheme = Theme.of(context).colorScheme;
 
+    Widget? followButton;
+    if (widget.onFollow != null && widget.onUnfollow != null) {
+      if (profile.isFollowing) {
+        followButton = OutlinedButton.icon(
+          onPressed: _busy
+              ? null
+              : () => _act(() => widget.onUnfollow!(profile.user.id)),
+          icon: const Icon(Icons.check_rounded, size: 18),
+          label: const Text('Đang theo dõi'),
+        );
+      } else {
+        followButton = FilledButton.tonalIcon(
+          onPressed: _busy
+              ? null
+              : () => _act(() => widget.onFollow!(profile.user.id)),
+          icon: const Icon(Icons.person_add_alt_1_rounded, size: 18),
+          label: const Text('Theo dõi'),
+        );
+      }
+    }
+
     switch (profile.friendship) {
       case Friendship.self:
         return null;
       case Friendship.none:
-        return _wide(
-          FilledButton.icon(
-            onPressed: _busy
-                ? null
-                : () => _act(() => widget.onSendRequest(profile.user.id)),
-            icon: const Icon(Icons.person_add_alt_rounded),
-            label: const Text('Thêm bạn'),
-          ),
+        final addFriend = FilledButton.icon(
+          onPressed: _busy
+              ? null
+              : () => _act(() => widget.onSendRequest(profile.user.id)),
+          icon: const Icon(Icons.person_add_alt_rounded),
+          label: const Text('Thêm bạn'),
         );
+        if (followButton != null) {
+          return Row(
+            children: [
+              Expanded(child: addFriend),
+              const SizedBox(width: 8),
+              Expanded(child: followButton),
+            ],
+          );
+        }
+        return _wide(addFriend);
       case Friendship.pendingOutgoing:
-        return _wide(
-          OutlinedButton.icon(
-            onPressed: _busy || requestId == null
-                ? null
-                : () => _act(() => widget.onDeleteRequest(requestId)),
-            icon: const Icon(Icons.close_rounded),
-            label: const Text('Hủy lời mời'),
-          ),
+        final cancelReq = OutlinedButton.icon(
+          onPressed: _busy || requestId == null
+              ? null
+              : () => _act(() => widget.onDeleteRequest(requestId)),
+          icon: const Icon(Icons.close_rounded),
+          label: const Text('Hủy lời mời'),
         );
+        if (followButton != null) {
+          return Row(
+            children: [
+              Expanded(child: cancelReq),
+              const SizedBox(width: 8),
+              Expanded(child: followButton),
+            ],
+          );
+        }
+        return _wide(cancelReq);
       case Friendship.pendingIncoming:
-        return Row(
+        final acceptRow = Row(
           children: [
             Expanded(
               child: FilledButton(
@@ -195,8 +254,19 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             ),
           ],
         );
+        if (followButton != null) {
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              acceptRow,
+              const SizedBox(height: 8),
+              _wide(followButton),
+            ],
+          );
+        }
+        return acceptRow;
       case Friendship.friends:
-        return Row(
+        final friendRow = Row(
           children: [
             Expanded(
               child: FilledButton.icon(
@@ -218,6 +288,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             ),
           ],
         );
+        return friendRow;
     }
   }
 
@@ -290,8 +361,42 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                   ))
           : ProfileScreen(
               posts: profile.posts,
-              user: profile.user,
+              user: profile.user.copyWith(
+                followersCount: profile.followersCount > 0
+                    ? profile.followersCount
+                    : profile.user.followersCount,
+                followingCount: profile.followingCount > 0
+                    ? profile.followingCount
+                    : profile.user.followingCount,
+                isFollowing: profile.isFollowing || profile.user.isFollowing,
+                followsYou: profile.followsYou || profile.user.followsYou,
+              ),
               action: _actionFor(profile),
+              onOpenProfile: widget.onOpenProfile,
+              onOpenFollowers: widget.onLoadFollowers == null
+                  ? null
+                  : () => showFollowListSheet(
+                      context,
+                      title: 'Người theo dõi',
+                      loadUsers: (cursor) =>
+                          widget.onLoadFollowers!(profile.user.id, cursor),
+                      onOpenProfile: widget.onOpenProfile,
+                    ),
+              onOpenFollowing: widget.onLoadFollowing == null
+                  ? null
+                  : () => showFollowListSheet(
+                      context,
+                      title: 'Đang theo dõi',
+                      loadUsers: (cursor) =>
+                          widget.onLoadFollowing!(profile.user.id, cursor),
+                      onOpenProfile: widget.onOpenProfile,
+                    ),
+              loadPhotos: widget.onLoadPhotos == null
+                  ? null
+                  : (cursor) => widget.onLoadPhotos!(profile.user.id, cursor),
+              loadFriends: widget.onLoadFriends == null
+                  ? null
+                  : (cursor) => widget.onLoadFriends!(profile.user.id, cursor),
             ),
     );
   }

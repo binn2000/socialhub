@@ -96,12 +96,17 @@ class PostHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
     final secondary = Theme.of(context).colorScheme.onSurfaceVariant;
-    final meta = [
-      post.createdAt,
+    final feelingAndPrivacy = [
       if (showFeeling && post.feeling?.isNotEmpty == true)
         'đang ${post.feeling!.toLowerCase()}',
       if (post.privacy?.isNotEmpty == true) post.privacy!,
     ].join(' · ');
+    final timeLine = showFeeling
+        ? post.createdAt
+        : [
+            post.createdAt,
+            if (post.privacy?.isNotEmpty == true) post.privacy!,
+          ].join(' · ');
 
     return Row(
       children: [
@@ -127,11 +132,20 @@ class PostHeader extends StatelessWidget {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        meta,
+                        timeLine,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: textTheme.bodySmall?.copyWith(color: secondary),
                       ),
+                      if (showFeeling && feelingAndPrivacy.isNotEmpty)
+                        Text(
+                          feelingAndPrivacy,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: textTheme.bodySmall?.copyWith(
+                            color: secondary,
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -181,8 +195,9 @@ class PostAction extends StatelessWidget {
           onPressed: onPressed,
           style: TextButton.styleFrom(
             foregroundColor: iconColor,
-            minimumSize: const Size(44, 40),
-            padding: const EdgeInsets.symmetric(horizontal: 10),
+            minimumSize: const Size(36, 36),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            padding: const EdgeInsets.symmetric(horizontal: 6),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(AppRadius.full),
             ),
@@ -192,7 +207,7 @@ class PostAction extends StatelessWidget {
             children: [
               _PopIcon(icon: icon, color: iconColor, active: active),
               if (count != null) ...[
-                const SizedBox(width: 6),
+                const SizedBox(width: 4),
                 AnimatedCount(
                   value: count!,
                   style: TextStyle(
@@ -258,7 +273,7 @@ class _PopIconState extends State<_PopIcon>
         child: Icon(
           widget.icon,
           key: ValueKey(widget.icon),
-          size: 21,
+          size: 19,
           color: widget.color,
         ),
       ),
@@ -291,6 +306,7 @@ class PostActionBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
     return Row(
+      mainAxisSize: onToggleSave != null ? MainAxisSize.max : MainAxisSize.min,
       children: [
         PostAction(
           icon: post.isLiked
@@ -320,8 +336,8 @@ class PostActionBar extends StatelessWidget {
             semanticsLabel: 'Chia sẻ, ${post.shares} lượt chia sẻ',
             onPressed: onShare,
           ),
-        const Spacer(),
-        if (onToggleSave != null)
+        if (onToggleSave != null) ...[
+          const Spacer(),
           PostAction(
             icon: isSaved
                 ? Icons.bookmark_rounded
@@ -332,33 +348,21 @@ class PostActionBar extends StatelessWidget {
             semanticsLabel: isSaved ? 'Bỏ lưu bài viết' : 'Lưu bài viết',
             onPressed: onToggleSave,
           ),
+        ],
       ],
     );
   }
 }
 
-/// Fades and lifts a feed item into place the first time it is built.
+/// Wrapper for feed items; kept lightweight so scrolling large lists does not
+/// schedule per-card animations on every frame.
 class FadeInUp extends StatelessWidget {
   final Widget child;
 
   const FadeInUp({super.key, required this.child});
 
   @override
-  Widget build(BuildContext context) {
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: AppMotion.slow,
-      curve: AppMotion.curve,
-      child: child,
-      builder: (context, t, child) => Opacity(
-        opacity: t,
-        child: Transform.translate(
-          offset: Offset(0, (1 - t) * 8),
-          child: child,
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => child;
 }
 
 /// Surface card that highlights its border and lifts slightly on desktop/web

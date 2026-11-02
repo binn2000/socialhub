@@ -25,8 +25,15 @@ class MessagesScreen extends StatefulWidget {
 
   /// Used by the 2-column Desktop chat pane.
   final UserModel? currentUser;
-  final void Function(String conversationId, String text)? onSendMessage;
+  final void Function(
+    String conversationId,
+    String text, {
+    List<String>? attachmentPaths,
+  })?
+  onSendMessage;
   final ValueChanged<Conversation>? onSelectDesktopConversation;
+  final Future<String?> Function()? onPickAttachment;
+  final void Function(bool typing)? onTyping;
 
   const MessagesScreen({
     super.key,
@@ -38,6 +45,8 @@ class MessagesScreen extends StatefulWidget {
     this.currentUser,
     this.onSendMessage,
     this.onSelectDesktopConversation,
+    this.onPickAttachment,
+    this.onTyping,
   });
 
   @override
@@ -323,8 +332,14 @@ class _MessagesScreenState extends State<MessagesScreen> {
                             conversations: widget.conversations,
                             conversationId: activeId,
                             currentUser: widget.currentUser!,
-                            onSendMessage: (text) =>
-                                widget.onSendMessage!(activeId, text),
+                            onSendMessage: (text, {attachmentPaths}) =>
+                                widget.onSendMessage!(
+                                  activeId,
+                                  text,
+                                  attachmentPaths: attachmentPaths,
+                                ),
+                            onPickAttachment: widget.onPickAttachment,
+                            onTyping: widget.onTyping,
                             refresh: widget.refresh,
                             embedded: true,
                           ),

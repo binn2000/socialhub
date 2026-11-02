@@ -44,6 +44,30 @@ void main() {
     );
   });
 
+  test('cover and About come from the profile json', () {
+    final user = userFromJson({
+      ..._author(),
+      'bio': null,
+      'coverUrl': 'http://localhost:8000/storage/covers/c.jpg',
+      'about': {
+        'location': 'Hà Nội',
+        'hometown': null,
+        'workplace': 'SocialHub',
+        'education': null,
+        'website': 'https://example.com',
+        'birthday': '1998-05-17',
+      },
+    }, absoluteUrl: (url) => url.replaceFirst('localhost', '10.0.2.2'));
+
+    expect(user.coverUrl, 'http://10.0.2.2:8000/storage/covers/c.jpg');
+    expect(user.about.location, 'Hà Nội');
+    expect(user.about.hometown, '');
+    expect(user.about.birthdayLabel, '17/05/1998');
+    expect(user.about.isEmpty, isFalse);
+    expect(userFromJson(_author()).about.isEmpty, isTrue);
+    expect(userFromJson(_author()).coverUrl, '');
+  });
+
   test('a list item knows if the user is a friend', () {
     final user = userFromJson({
       ..._author(),

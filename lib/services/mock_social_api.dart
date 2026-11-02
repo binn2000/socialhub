@@ -111,8 +111,9 @@ class MockSocialApi extends SocialApi {
   @override
   Future<ChatMessage> sendMessage(
     String conversationId,
-    ChatMessage draft,
-  ) async => draft;
+    ChatMessage draft, {
+    List<String>? attachmentPaths,
+  }) async => draft;
 
   @override
   Future<void> deletePost(String postId) async {}
@@ -194,10 +195,14 @@ class MockSocialApi extends SocialApi {
 
   // The mock has nobody else sending messages, so there is nothing new.
   @override
-  Future<List<ChatMessage>> loadNewMessages(
+  Future<MessagePoll> loadNewMessages(
     String conversationId, {
     String? afterMessageId,
-  }) async => const [];
+  }) async => const MessagePoll();
+
+  @override
+  Future<PostPage> loadFeedFilter(String filter, {String? cursor}) async =>
+      const PostPage(posts: []);
 
   @override
   Future<List<Conversation>> loadConversations() async =>
@@ -246,4 +251,47 @@ class MockSocialApi extends SocialApi {
 
   @override
   Future<UserModel> uploadAvatar(String filePath) async => currentUser;
+
+  // Covers, photo and friend lists of other people and suggestions need a server.
+  @override
+  Future<UserModel> uploadCover(String filePath) async => currentUser;
+
+  @override
+  Future<PhotoPage> loadUserPhotos(String userId, {String? cursor}) async =>
+      const PhotoPage(photos: []);
+
+  @override
+  Future<UserPage> loadUserFriends(String userId, {String? cursor}) async =>
+      const UserPage(users: []);
+
+  @override
+  Future<UserPage> loadSuggestions({String? cursor}) async =>
+      const UserPage(users: []);
+
+  @override
+  Future<void> followUser(String userId) async {}
+
+  @override
+  Future<void> unfollowUser(String userId) async {}
+
+  @override
+  Future<UserPage> loadFollowers(String userId, {String? cursor}) async =>
+      const UserPage(users: []);
+
+  @override
+  Future<UserPage> loadFollowing(String userId, {String? cursor}) async =>
+      const UserPage(users: []);
+
+  @override
+  Future<void> sendPresence() async {}
+
+  @override
+  Future<void> sendTyping(String conversationId) async {}
+
+  @override
+  Future<void> stopTyping(String conversationId) async {}
+
+  @override
+  Future<UserModel> setShowOnlineStatus(bool show) async =>
+      currentUser.copyWith(showOnlineStatus: show);
 }

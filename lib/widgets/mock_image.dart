@@ -116,36 +116,22 @@ class PostMedia extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final images = post.allImages;
+    final fallback = _fallback(post);
+
+    if (images.length > 1) {
+      return _MultiImageCarousel(
+        post: post,
+        images: images,
+        fallback: fallback,
+      );
+    }
+
     final imageUrl = post.imageUrl;
     final canLoadAsset = canLoadAssetImage(imageUrl);
-    final fallback = _fallback(post);
     final isVideo = post.isVideo || (imageUrl?.endsWith('.mp4') ?? false);
 
-    final media = isLocalPhoto(imageUrl)
-        ? Image.file(
-            File(imageUrl!),
-            width: double.infinity,
-            height: 220,
-            fit: BoxFit.cover,
-            errorBuilder: (context, error, stackTrace) => fallback,
-          )
-        : isNetworkImage(imageUrl)
-        ? Image.network(
-            imageUrl!,
-            width: double.infinity,
-            height: 220,
-            fit: BoxFit.cover,
-            errorBuilder: (context, error, stackTrace) => fallback,
-          )
-        : canLoadAsset
-        ? Image.asset(
-            imageUrl!,
-            width: double.infinity,
-            height: 220,
-            fit: BoxFit.cover,
-            errorBuilder: (context, error, stackTrace) => fallback,
-          )
-        : fallback;
+    final media = _buildSingleImage(imageUrl, fallback, canLoadAsset);
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(AppRadius.md),
@@ -195,6 +181,38 @@ class PostMedia extends StatelessWidget {
     );
   }
 
+  static Widget _buildSingleImage(
+    String? imageUrl,
+    Widget fallback,
+    bool canLoadAsset,
+  ) {
+    return isLocalPhoto(imageUrl)
+        ? Image.file(
+            File(imageUrl!),
+            width: double.infinity,
+            height: 220,
+            fit: BoxFit.cover,
+            errorBuilder: (context, error, stackTrace) => fallback,
+          )
+        : isNetworkImage(imageUrl)
+        ? Image.network(
+            imageUrl!,
+            width: double.infinity,
+            height: 220,
+            fit: BoxFit.cover,
+            errorBuilder: (context, error, stackTrace) => fallback,
+          )
+        : canLoadAsset
+        ? Image.asset(
+            imageUrl!,
+            width: double.infinity,
+            height: 220,
+            fit: BoxFit.cover,
+            errorBuilder: (context, error, stackTrace) => fallback,
+          )
+        : fallback;
+  }
+
   Widget _fallback(Post post) {
     final tones = post.imageId == null
         ? _legacyColors(post.id)
@@ -212,5 +230,93 @@ class PostMedia extends StatelessWidget {
   List<Color> _legacyColors(String key) {
     final index = key.codeUnits.fold<int>(0, (sum, value) => sum + value);
     return mutedMediaTones[index % mutedMediaTones.length];
+  }
+}
+
+/// Carousel view for posts with multiple images.
+class _MultiImageCarousel extends StatefulWidget {
+  final Post post;
+  final List<String> images;
+  final Widget fallback;
+
+  const _MultiImageCarousel({
+    required this.post,
+    required this.images,
+    required this.fallback,
+  });
+
+  @override
+  State<_MultiImageCarousel> createState() => _MultiImageCarouselState();
+}
+
+class _MultiImageCarouselState extends State<_MultiImageCarousel> {
+  int _currentIndex = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final images = widget.images;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(AppRadius.md),
+      child: Stack(
+        alignment: Alignment.bottomCenter,
+        children: [
+          SizedBox(
+            height: 240,
+            child: PageView.builder(
+              itemCount: images.length,
+              onPageChanged: (index) => setState(() => _currentIndex = index),
+              itemBuilder: (context, index) {
+                final url = images[index];
+                return PostMedia._buildSingleImage(
+                  url,
+                  widget.fallback,
+                  canLoadAssetImage(url),
+                );
+              },
+            ),
+          ),
+          Positioned(
+            top: 10,
+            right: 10,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.65),
+                borderRadius: BorderRadius.circular(AppRadius.full),
+              ),
+              child: Text(
+                '${_currentIndex + 1}/${images.length}',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: 10,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: List.generate(images.length, (index) {
+                final isSelected = index == _currentIndex;
+                return AnimatedContainer(
+                  duration: AppMotion.fast,
+                  margin: const EdgeInsets.symmetric(horizontal: 3),
+                  width: isSelected ? 16 : 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: isSelected
+                        ? Colors.white
+                        : Colors.white.withValues(alpha: 0.45),
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                );
+              }),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

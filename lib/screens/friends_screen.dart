@@ -51,6 +51,10 @@ class FriendsScreen extends StatefulWidget {
   /// Loads the next page of the plain (not searched) list.
   final VoidCallback? onLoadMore;
 
+  /// "Người bạn có thể biết" from the server, most friends in common first.
+  /// When null (the mock app) the tab shows everyone who is not a friend.
+  final Future<UserPage> Function(String? cursor)? onLoadSuggestions;
+
   const FriendsScreen({
     super.key,
     required this.users,
@@ -64,6 +68,7 @@ class FriendsScreen extends StatefulWidget {
     this.onRefresh,
     this.onSearchUsers,
     this.onLoadMore,
+    this.onLoadSuggestions,
   });
 
   @override
@@ -87,6 +92,60 @@ class _FriendsScreenState extends State<FriendsScreen> {
   bool _searching = false;
   bool _loadingMoreResults = false;
   String? _searchError;
+
+  // Server suggestions (only when onLoadSuggestions is set).
+  List<UserModel>? _suggestions;
+  String? _suggestionsCursor;
+  bool _loadingSuggestions = false;
+  String? _suggestionsError;
+
+  bool get _suggestsOnServer =>
+      widget.onLoadSuggestions != null &&
+      _category == FriendsCategoryFilter.suggestions &&
+      !_searchesOnServer;
+
+  void _selectCategory(FriendsCategoryFilter category) {
+    setState(() => _category = category);
+    if (category == FriendsCategoryFilter.suggestions &&
+        widget.onLoadSuggestions != null) {
+      _loadSuggestions();
+    }
+  }
+
+  Future<void> _loadSuggestions({bool more = false}) async {
+    if (_loadingSuggestions) return;
+    final cursor = more ? _suggestionsCursor : null;
+    if (more && cursor == null) return;
+    setState(() {
+      _loadingSuggestions = true;
+      _suggestionsError = null;
+    });
+    try {
+      final page = await widget.onLoadSuggestions!(cursor);
+      if (!mounted) return;
+      setState(() {
+        final known = {
+          for (final user in _suggestions ?? <UserModel>[]) user.id,
+        };
+        _suggestions = more
+            ? [
+                ...?_suggestions,
+                for (final user in page.users)
+                  if (!known.contains(user.id)) user,
+              ]
+            : page.users;
+        _resultPendingIds = {..._resultPendingIds, ...page.pendingIds};
+        _suggestionsCursor = page.nextCursor;
+        _loadingSuggestions = false;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loadingSuggestions = false;
+        _suggestionsError = error.displayMessage;
+      });
+    }
+  }
 
   bool get _searchesOnServer =>
       widget.onSearchUsers != null && _searchQuery.trim().isNotEmpty;
@@ -138,6 +197,10 @@ class _FriendsScreenState extends State<FriendsScreen> {
   }
 
   void _loadMore() {
+    if (_suggestsOnServer) {
+      _loadSuggestions(more: true);
+      return;
+    }
     if (!_searchesOnServer) {
       widget.onLoadMore?.call();
       return;
@@ -182,7 +245,11 @@ class _FriendsScreenState extends State<FriendsScreen> {
 
   List<UserModel> get _filteredUsers {
     final query = _searchQuery.trim().toLowerCase();
-    return (_searchesOnServer ? _results ?? const <UserModel>[] : widget.users)
+    return (_searchesOnServer
+            ? _results ?? const <UserModel>[]
+            : _suggestsOnServer
+            ? _suggestions ?? const <UserModel>[]
+            : widget.users)
         .where((user) => user.id != widget.currentUser.id)
         // People who asked us are answered in the requests section above.
         .where(
@@ -191,7 +258,9 @@ class _FriendsScreenState extends State<FriendsScreen> {
         )
         .where(
           (user) =>
-              _searchesOnServer || user.name.toLowerCase().contains(query),
+              _searchesOnServer ||
+              _suggestsOnServer ||
+              user.name.toLowerCase().contains(query),
         )
         .where((user) {
           switch (_category) {
@@ -385,8 +454,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
                                 : colorScheme.outlineVariant,
                           ),
                           visualDensity: VisualDensity.compact,
-                          onSelected: (_) =>
-                              setState(() => _category = category),
+                          onSelected: (_) => _selectCategory(category),
                         ),
                       ),
                   ],
@@ -495,11 +563,28 @@ class _FriendsScreenState extends State<FriendsScreen> {
   }
 
   Widget _emptyState(ColorScheme colorScheme) {
+    final suggesting = _suggestsOnServer;
     final message = Center(
-      child: _searching
+      child: _searching || (suggesting && _loadingSuggestions)
           ? const CircularProgressIndicator()
+          : suggesting && _suggestionsError != null
+          ? Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _suggestionsError!,
+                  style: TextStyle(color: colorScheme.onSurfaceVariant),
+                ),
+                TextButton(
+                  onPressed: _loadSuggestions,
+                  child: const Text('Thử lại'),
+                ),
+              ],
+            )
           : Text(
-              _searchError ?? 'Không tìm thấy người dùng',
+              suggesting
+                  ? 'Chưa có gợi ý nào'
+                  : _searchError ?? 'Không tìm thấy người dùng',
               style: TextStyle(color: colorScheme.onSurfaceVariant),
             ),
     );
@@ -518,12 +603,21 @@ class _FriendsScreenState extends State<FriendsScreen> {
   Widget _refreshable(Widget child) {
     final refresh = widget.onRefresh;
     return LoadMoreListener(
-      onLoadMore: widget.onSearchUsers == null && widget.onLoadMore == null
+      onLoadMore:
+          widget.onSearchUsers == null &&
+              widget.onLoadMore == null &&
+              widget.onLoadSuggestions == null
           ? null
           : _loadMore,
       child: refresh == null
           ? child
-          : RefreshIndicator(onRefresh: refresh, child: child),
+          : RefreshIndicator(
+              onRefresh: () async {
+                await refresh();
+                if (_suggestsOnServer) await _loadSuggestions();
+              },
+              child: child,
+            ),
     );
   }
 }

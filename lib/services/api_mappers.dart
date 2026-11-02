@@ -76,6 +76,22 @@ Color _accentFor(String id) =>
     _accentColors[id.codeUnits.fold<int>(0, (sum, c) => sum + c) %
         _accentColors.length];
 
+String _urlOrEmpty(String? url, String Function(String)? absoluteUrl) =>
+    url == null ? '' : (absoluteUrl == null ? url : absoluteUrl(url));
+
+UserAbout _aboutFromJson(Json? json) {
+  if (json == null) return UserAbout.empty;
+  String text(String key) => (json[key] as String?) ?? '';
+  return UserAbout(
+    location: text('location'),
+    hometown: text('hometown'),
+    workplace: text('workplace'),
+    education: text('education'),
+    website: text('website'),
+    birthday: text('birthday'),
+  );
+}
+
 /// A UserSummary (or a UserListItem / UserProfile / Me, which extend it).
 /// [absoluteUrl] makes the avatar URL loadable from this device.
 UserModel userFromJson(Json json, {String Function(String)? absoluteUrl}) {
@@ -89,7 +105,7 @@ UserModel userFromJson(Json json, {String Function(String)? absoluteUrl}) {
     avatarUrl: avatarUrl == null
         ? ''
         : (absoluteUrl == null ? avatarUrl : absoluteUrl(avatarUrl)),
-    coverUrl: '',
+    coverUrl: _urlOrEmpty(json['coverUrl'] as String?, absoluteUrl),
     bio: (json['bio'] as String?) ?? '',
     // The mock model used this number for the friends count on Profile.
     mutualFriends:
@@ -97,11 +113,28 @@ UserModel userFromJson(Json json, {String Function(String)? absoluteUrl}) {
     isFriend: isSelf || (json['friendship'] as Json?)?['status'] == 'friends',
     accentColor: _accentFor(id),
     emailVerified: (json['emailVerified'] as bool?) ?? true,
+    about: _aboutFromJson(json['about'] as Json?),
+    isOnline: (json['isOnline'] as bool?) ?? false,
+    lastSeenAt: json['lastSeenAt'] != null
+        ? timeAgo(json['lastSeenAt'] as String)
+        : null,
+    showOnlineStatus: (json['showOnlineStatus'] as bool?) ?? true,
+    followersCount: (json['followersCount'] as int?) ?? 0,
+    followingCount: (json['followingCount'] as int?) ?? 0,
+    isFollowing: (json['isFollowing'] as bool?) ?? false,
+    followsYou: (json['followsYou'] as bool?) ?? false,
   );
 }
 
 Post postFromJson(Json json, {String Function(String)? absoluteUrl}) {
   final imageUrl = json['imageUrl'] as String?;
+  final rawUrls = json['imageUrls'] as List<dynamic>?;
+  final imageUrls = rawUrls != null
+      ? [
+          for (final u in rawUrls)
+            if (u is String) (absoluteUrl == null ? u : absoluteUrl(u)),
+        ]
+      : const <String>[];
   return Post(
     id: json['id'] as String,
     author: userFromJson(json['author'] as Json, absoluteUrl: absoluteUrl),
@@ -109,6 +142,7 @@ Post postFromJson(Json json, {String Function(String)? absoluteUrl}) {
     imageUrl: imageUrl == null
         ? null
         : (absoluteUrl == null ? imageUrl : absoluteUrl(imageUrl)),
+    imageUrls: imageUrls,
     feeling: feelingLabel(json['feeling'] as String?),
     privacy: privacyLabel(json['privacy'] as String?),
     createdAt: timeAgo(json['createdAt'] as String),
@@ -133,12 +167,38 @@ Story storyFromJson(Json json, {String Function(String)? absoluteUrl}) {
   );
 }
 
-ChatMessage messageFromJson(Json json) => ChatMessage(
-  id: json['id'] as String,
-  senderId: json['senderId'] as String,
-  text: json['text'] as String,
-  time: timeAgo(json['createdAt'] as String),
-);
+ChatAttachment attachmentFromJson(
+  Json json, {
+  String Function(String)? absoluteUrl,
+}) {
+  final url = json['url'] as String;
+  return ChatAttachment(
+    id: json['id'] as String,
+    type: json['type'] as String,
+    url: absoluteUrl == null ? url : absoluteUrl(url),
+    name: json['name'] as String,
+    mimeType: json['mimeType'] as String,
+    sizeBytes: json['sizeBytes'] as int,
+    width: json['width'] as int?,
+    height: json['height'] as int?,
+  );
+}
+
+ChatMessage messageFromJson(Json json, {String Function(String)? absoluteUrl}) {
+  final rawAttachments = json['attachments'] as List<dynamic>?;
+  return ChatMessage(
+    id: json['id'] as String,
+    senderId: json['senderId'] as String,
+    text: json['text'] as String,
+    time: timeAgo(json['createdAt'] as String),
+    attachments: rawAttachments != null
+        ? [
+            for (final a in rawAttachments)
+              if (a is Json) attachmentFromJson(a, absoluteUrl: absoluteUrl),
+          ]
+        : const [],
+  );
+}
 
 /// A conversation without its messages (they are loaded when it is opened).
 Conversation conversationFromJson(

@@ -71,14 +71,23 @@ class _StoryCreatorScreenState extends State<StoryCreatorScreen> {
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
+        leading: IconButton(
+          icon: const Icon(Icons.close_rounded, color: Colors.white),
+          tooltip: 'Đóng',
+          onPressed: () => Navigator.maybePop(context),
+        ),
         title: const Text(
           'Tạo tin',
-          style: TextStyle(fontWeight: FontWeight.w700),
+          style: TextStyle(fontWeight: FontWeight.w700, color: Colors.white),
         ),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF3D4DD8),
+                foregroundColor: Colors.white,
+              ),
               onPressed: _publish,
               child: const Text('Chia sẻ'),
             ),
@@ -108,22 +117,60 @@ class _StoryCreatorScreenState extends State<StoryCreatorScreen> {
                               fit: BoxFit.cover,
                             ),
                       borderRadius: BorderRadius.circular(24),
+                      boxShadow: [
+                        BoxShadow(
+                          color: colors.first.withValues(alpha: 0.35),
+                          blurRadius: 24,
+                          offset: const Offset(0, 10),
+                        ),
+                      ],
                     ),
                     child: Center(
-                      child: TextField(
-                        controller: _controller,
-                        autofocus: true,
-                        maxLines: 6,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 26,
-                          fontWeight: FontWeight.w700,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
                         ),
-                        decoration: const InputDecoration(
-                          hintText: 'Viết gì đó...',
-                          hintStyle: TextStyle(color: Colors.white70),
-                          border: InputBorder.none,
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.28),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: TextField(
+                          controller: _controller,
+                          autofocus: true,
+                          maxLines: 6,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 24,
+                            fontWeight: FontWeight.w700,
+                            shadows: [
+                              Shadow(
+                                color: Colors.black54,
+                                offset: Offset(0, 1.5),
+                                blurRadius: 4,
+                              ),
+                            ],
+                          ),
+                          decoration: const InputDecoration(
+                            hintText: 'Viết gì đó...',
+                            hintStyle: TextStyle(
+                              color: Colors.white70,
+                              fontWeight: FontWeight.w500,
+                              shadows: [
+                                Shadow(
+                                  color: Colors.black54,
+                                  offset: Offset(0, 1),
+                                  blurRadius: 3,
+                                ),
+                              ],
+                            ),
+                            border: InputBorder.none,
+                            enabledBorder: InputBorder.none,
+                            focusedBorder: InputBorder.none,
+                            filled: false,
+                            contentPadding: EdgeInsets.zero,
+                          ),
                         ),
                       ),
                     ),

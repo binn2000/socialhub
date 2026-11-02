@@ -320,11 +320,15 @@ class HttpSocialApi extends SocialApi {
 
   static const _moreLimit = 30;
 
-  Future<PostPage> _postPage(String path, String cursor) async {
+  Future<PostPage> _postPage(
+    String path,
+    String? cursor, {
+    Map<String, dynamic> extra = const {},
+  }) async {
     final response = await _request(
       'GET',
       path,
-      query: {'limit': _moreLimit, 'cursor': cursor},
+      query: {'limit': _moreLimit, 'cursor': ?cursor, ...extra},
     );
     final posts = _list(response);
     return PostPage(
@@ -339,6 +343,10 @@ class HttpSocialApi extends SocialApi {
 
   @override
   Future<PostPage> loadMoreFeed(String cursor) => _postPage('/feed', cursor);
+
+  @override
+  Future<PostPage> loadFeedFilter(String filter, {String? cursor}) =>
+      _postPage('/feed', cursor, extra: {'filter': filter});
 
   @override
   Future<PostPage> loadMoreExplore(String cursor) =>
@@ -416,21 +424,55 @@ class HttpSocialApi extends SocialApi {
     });
   }
 
+  /// Body for creating a post with optional multiple images.
+  Future<Object> _postCreateBody(
+    Map<String, Object?> fields,
+    List<String> photos,
+  ) async {
+    final present = {
+      for (final entry in fields.entries)
+        if (entry.value != null && entry.value != '') entry.key: entry.value,
+    };
+    final localFiles = [
+      for (final p in photos)
+        if (_localPhoto(p) != null) _localPhoto(p)!,
+    ];
+    if (localFiles.isEmpty) return present;
+
+    if (localFiles.length == 1) {
+      return FormData.fromMap({
+        ...present,
+        'image': await MultipartFile.fromFile(localFiles.first),
+      });
+    }
+
+    final multipartList = <MultipartFile>[];
+    for (final path in localFiles) {
+      multipartList.add(await MultipartFile.fromFile(path));
+    }
+    return FormData.fromMap({...present, 'images': multipartList});
+  }
+
   @override
-  Future<Post> createPost(Post draft) async => postFromJson(
-    (await _request(
-          'POST',
-          '/posts',
-          idempotent: true,
-          data: await _body({
-            'content': draft.content,
-            'feeling': feelingValue(draft.feeling),
-            'privacy': privacyValue(draft.privacy) ?? 'public',
-          }, _localPhoto(draft.imageUrl)),
-        ))['data']
-        as Json,
-    absoluteUrl: _absoluteUrl,
-  );
+  Future<Post> createPost(Post draft) async {
+    final imagesToUpload = draft.imageUrls.isNotEmpty
+        ? draft.imageUrls
+        : (draft.imageUrl != null ? [draft.imageUrl!] : const <String>[]);
+    return postFromJson(
+      (await _request(
+            'POST',
+            '/posts',
+            idempotent: true,
+            data: await _postCreateBody({
+              'content': draft.content,
+              'feeling': feelingValue(draft.feeling),
+              'privacy': privacyValue(draft.privacy) ?? 'public',
+            }, imagesToUpload),
+          ))['data']
+          as Json,
+      absoluteUrl: _absoluteUrl,
+    );
+  }
 
   @override
   Future<Story> createStory(Story draft) async => storyFromJson(
@@ -450,16 +492,34 @@ class HttpSocialApi extends SocialApi {
   @override
   Future<ChatMessage> sendMessage(
     String conversationId,
-    ChatMessage draft,
-  ) async => messageFromJson(
-    (await _request(
-          'POST',
-          '/conversations/$conversationId/messages',
-          idempotent: true,
-          data: {'text': draft.text},
-        ))['data']
-        as Json,
-  );
+    ChatMessage draft, {
+    List<String>? attachmentPaths,
+  }) async {
+    Object body;
+    if (attachmentPaths != null && attachmentPaths.isNotEmpty) {
+      final multipartList = <MultipartFile>[];
+      for (final p in attachmentPaths) {
+        multipartList.add(await MultipartFile.fromFile(p));
+      }
+      body = FormData.fromMap({
+        if (draft.text.isNotEmpty) 'text': draft.text,
+        'attachments': multipartList,
+      });
+    } else {
+      body = {'text': draft.text};
+    }
+
+    return messageFromJson(
+      (await _request(
+            'POST',
+            '/conversations/$conversationId/messages',
+            idempotent: true,
+            data: body,
+          ))['data']
+          as Json,
+      absoluteUrl: _absoluteUrl,
+    );
+  }
 
   @override
   Future<void> deletePost(String postId) async {
@@ -576,6 +636,10 @@ class HttpSocialApi extends SocialApi {
       friendship: friendshipFromJson(friendship['status'] as String?),
       requestId: friendship['requestId'] as String?,
       isBlocked: profile['isBlocked'] == true,
+      isFollowing: (profile['isFollowing'] as bool?) ?? false,
+      followsYou: (profile['followsYou'] as bool?) ?? false,
+      followersCount: (profile['followersCount'] as int?) ?? 0,
+      followingCount: (profile['followingCount'] as int?) ?? 0,
       posts: [
         for (final post in _list(responses[1]))
           postFromJson(post, absoluteUrl: _absoluteUrl),
@@ -592,22 +656,26 @@ class HttpSocialApi extends SocialApi {
     );
     // The API answers newest first; the chat shows oldest first.
     return [
-      for (final message in _list(response).reversed) messageFromJson(message),
+      for (final message in _list(response).reversed)
+        messageFromJson(message, absoluteUrl: _absoluteUrl),
     ];
   }
 
   @override
-  Future<List<ChatMessage>> loadNewMessages(
+  Future<MessagePoll> loadNewMessages(
     String conversationId, {
     String? afterMessageId,
   }) async {
     if (afterMessageId == null) {
-      return await loadMessages(conversationId) ?? const [];
+      return MessagePoll(
+        messages: await loadMessages(conversationId) ?? const [],
+      );
     }
 
     // `after` pages oldest first and says when there is more.
     final messages = <ChatMessage>[];
     var after = afterMessageId;
+    var typing = false;
     while (true) {
       final response = await _request(
         'GET',
@@ -615,11 +683,16 @@ class HttpSocialApi extends SocialApi {
         query: {'after': after, 'limit': 100},
       );
       final page = [
-        for (final message in _list(response)) messageFromJson(message),
+        for (final message in _list(response))
+          messageFromJson(message, absoluteUrl: _absoluteUrl),
       ];
       messages.addAll(page);
-      final hasMore = (response['meta'] as Json)['hasMore'] == true;
-      if (!hasMore || page.isEmpty) return messages;
+      final meta = response['meta'] as Json;
+      typing = meta['otherTyping'] == true;
+      final hasMore = meta['hasMore'] == true;
+      if (!hasMore || page.isEmpty) {
+        return MessagePoll(messages: messages, otherTyping: typing);
+      }
       after = page.last.id;
     }
   }
@@ -711,9 +784,27 @@ class HttpSocialApi extends SocialApi {
   }
 
   @override
-  Future<UserModel> updateProfile(UserModel user) async => _me(
-    await _request('PATCH', '/me', data: {'name': user.name, 'bio': user.bio}),
-  );
+  Future<UserModel> updateProfile(UserModel user) async {
+    String? text(String value) => value.trim().isEmpty ? null : value.trim();
+    final about = user.about;
+    return _me(
+      await _request(
+        'PATCH',
+        '/me',
+        data: {
+          'name': user.name,
+          'bio': user.bio,
+          // Empty means "clear it" on the server.
+          'location': text(about.location),
+          'hometown': text(about.hometown),
+          'workplace': text(about.workplace),
+          'education': text(about.education),
+          'website': text(about.website),
+          'birthday': text(about.birthday),
+        },
+      ),
+    );
+  }
 
   @override
   Future<UserModel> uploadAvatar(String filePath) async => _me(
@@ -725,4 +816,115 @@ class HttpSocialApi extends SocialApi {
       }),
     ),
   );
+
+  @override
+  Future<UserModel> uploadCover(String filePath) async => _me(
+    await _request(
+      'POST',
+      '/me/cover',
+      data: FormData.fromMap({'cover': await MultipartFile.fromFile(filePath)}),
+    ),
+  );
+
+  @override
+  Future<PhotoPage> loadUserPhotos(String userId, {String? cursor}) async {
+    final response = await _request(
+      'GET',
+      '/users/$userId/photos',
+      query: {'limit': _moreLimit, 'cursor': ?cursor},
+    );
+    return PhotoPage(
+      photos: [
+        for (final photo in _list(response))
+          ProfilePhoto(
+            postId: photo['postId'] as String,
+            imageUrl: _absoluteUrl(photo['imageUrl'] as String),
+          ),
+      ],
+      nextCursor: _nextCursor(response),
+    );
+  }
+
+  UserPage _userPage(Json response) {
+    final users = _list(response);
+    return UserPage(
+      users: [
+        for (final user in users) userFromJson(user, absoluteUrl: _absoluteUrl),
+      ],
+      pendingIds: {
+        for (final user in users)
+          if ((user['friendship'] as Json)['status'] == 'pending_outgoing')
+            user['id'] as String,
+      },
+      nextCursor: _nextCursor(response),
+    );
+  }
+
+  @override
+  Future<UserPage> loadUserFriends(String userId, {String? cursor}) async =>
+      _userPage(
+        await _request(
+          'GET',
+          '/users/$userId/friends',
+          query: {'limit': _moreLimit, 'cursor': ?cursor},
+        ),
+      );
+
+  @override
+  Future<UserPage> loadSuggestions({String? cursor}) async => _userPage(
+    await _request(
+      'GET',
+      '/users/suggestions',
+      query: {'limit': _moreLimit, 'cursor': ?cursor},
+    ),
+  );
+
+  @override
+  Future<void> followUser(String userId) async {
+    await _request('PUT', '/users/$userId/follow');
+  }
+
+  @override
+  Future<void> unfollowUser(String userId) async {
+    await _request('DELETE', '/users/$userId/follow');
+  }
+
+  @override
+  Future<UserPage> loadFollowers(String userId, {String? cursor}) async =>
+      _userPage(
+        await _request(
+          'GET',
+          '/users/$userId/followers',
+          query: {'limit': _moreLimit, 'cursor': ?cursor},
+        ),
+      );
+
+  @override
+  Future<UserPage> loadFollowing(String userId, {String? cursor}) async =>
+      _userPage(
+        await _request(
+          'GET',
+          '/users/$userId/following',
+          query: {'limit': _moreLimit, 'cursor': ?cursor},
+        ),
+      );
+
+  @override
+  Future<void> sendPresence() async {
+    await _request('POST', '/me/presence');
+  }
+
+  @override
+  Future<void> sendTyping(String conversationId) async {
+    await _request('PUT', '/conversations/$conversationId/typing');
+  }
+
+  @override
+  Future<void> stopTyping(String conversationId) async {
+    await _request('DELETE', '/conversations/$conversationId/typing');
+  }
+
+  @override
+  Future<UserModel> setShowOnlineStatus(bool show) async =>
+      _me(await _request('PATCH', '/me', data: {'showOnlineStatus': show}));
 }

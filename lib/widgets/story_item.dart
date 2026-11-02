@@ -68,11 +68,11 @@ class StoryItem extends StatelessWidget {
               imageUrl: currentStory.user.avatarUrl,
               radius: 29.5,
               showBorder: true,
-              // Unseen stories use the single brand color ring; seen stories
+              // Unseen stories pass their story ring colours; seen stories
               // use a subtle border ring.
               borderColors: currentStory.isViewed
-                  ? [palette.border]
-                  : [palette.brand],
+                  ? [palette.border, palette.border]
+                  : currentStory.gradientColors,
             ),
             const SizedBox(height: AppSpacing.sm),
             Text(
