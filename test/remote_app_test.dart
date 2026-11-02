@@ -85,6 +85,7 @@ class _FakeRemoteApi extends SocialApi {
   ApiException? loadError;
   ApiException? likeError;
   final loginCalls = <String>[];
+  final registerCalls = <String>[];
   final likes = <String, bool>{};
   final createdPosts = <Post>[];
   final createdStories = <Story>[];
@@ -115,7 +116,10 @@ class _FakeRemoteApi extends SocialApi {
     required String username,
     required String email,
     required String password,
-  }) async => _me;
+  }) async {
+    registerCalls.add(username);
+    return _me;
+  }
 
   @override
   Future<void> logout() async => logouts++;
@@ -934,6 +938,69 @@ void main() {
 
       expect(find.text('Mật khẩu cần ít nhất 8 ký tự'), findsOneWidget);
       expect(find.text('Từ 3 đến 30 ký tự: chữ, số hoặc _'), findsOneWidget);
+    });
+  });
+
+  group('terms on sign-up', () {
+    Future<_FakeRemoteApi> fillRegisterForm(WidgetTester tester) async {
+      final api = _FakeRemoteApi();
+      await _pump(tester, api);
+      await tester.tap(find.text('Chưa có tài khoản? Đăng ký'));
+      await tester.pumpAndSettle();
+      Future<void> fill(String label, String text) =>
+          tester.enterText(find.widgetWithText(TextFormField, label), text);
+      await fill('Tên hiển thị', 'Minh Ánh');
+      await fill('Tên người dùng', 'minh_anh');
+      await fill('Email', 'minh@example.com');
+      await fill('Mật khẩu', 'secret-pass');
+      return api;
+    }
+
+    testWidgets('signing up needs the terms to be accepted', (tester) async {
+      final api = await fillRegisterForm(tester);
+
+      await tester.ensureVisible(find.widgetWithText(FilledButton, 'Đăng ký'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Đăng ký'));
+      await tester.pumpAndSettle();
+      expect(api.registerCalls, isEmpty);
+      expect(
+        find.text('Bạn cần đồng ý với điều khoản để đăng ký'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byType(CheckboxListTile));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Bạn cần đồng ý với điều khoản để đăng ký'),
+        findsNothing,
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Đăng ký'));
+      await tester.pumpAndSettle();
+      expect(api.registerCalls, ['minh_anh']);
+    });
+
+    testWidgets('the terms and the policy open from the form', (tester) async {
+      await fillRegisterForm(tester);
+
+      await tester.ensureVisible(find.text('Điều khoản sử dụng'));
+      await tester.tap(find.text('Điều khoản sử dụng'));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(AppBar, 'Điều khoản sử dụng'), findsOneWidget);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+
+      await tester.ensureVisible(find.text('Chính sách quyền riêng tư'));
+      await tester.tap(find.text('Chính sách quyền riêng tư'));
+      await tester.pumpAndSettle();
+      expect(
+        find.widgetWithText(AppBar, 'Chính sách quyền riêng tư'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('signing in does not ask for the terms', (tester) async {
+      await _pump(tester, _FakeRemoteApi());
+      expect(find.byType(CheckboxListTile), findsNothing);
     });
   });
 

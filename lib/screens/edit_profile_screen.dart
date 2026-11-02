@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_learning/data/legal_texts.dart';
+import 'package:flutter_learning/screens/legal_screen.dart';
 import 'package:flutter_learning/models/user.dart';
 import 'package:flutter_learning/screens/delete_account_dialog.dart';
 import 'package:flutter_learning/widgets/user_avatar.dart';
@@ -282,6 +284,23 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   title: const Text('Người đã chặn'),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: widget.onOpenBlocked,
+                ),
+              ],
+              if (widget.editAbout) ...[
+                const SizedBox(height: 8),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.description_outlined),
+                  title: const Text('Điều khoản sử dụng'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => openLegal(context, termsOfService),
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.privacy_tip_outlined),
+                  title: const Text('Chính sách quyền riêng tư'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => openLegal(context, privacyPolicy),
                 ),
               ],
               if (widget.onDeleteAccount != null) ...[

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_learning/data/legal_texts.dart';
 import 'package:flutter_learning/models/user.dart';
 import 'package:flutter_learning/screens/forgot_password_screen.dart';
+import 'package:flutter_learning/screens/legal_screen.dart';
 import 'package:flutter_learning/services/social_api.dart';
 
 /// Sign in / sign up, shown when the app runs against a server and no saved
@@ -31,6 +33,8 @@ class _AuthScreenState extends State<AuthScreen> {
   final _password = TextEditingController();
   bool _isRegister = false;
   bool _busy = false;
+  bool _acceptedTerms = false;
+  bool _termsMissing = false;
   String? _error;
   String? _info;
 
@@ -44,7 +48,10 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   Future<void> _submit() async {
-    if (!_formKey.currentState!.validate() || _busy) return;
+    if (_busy) return;
+    final formOk = _formKey.currentState!.validate();
+    if (_isRegister && !_acceptedTerms) setState(() => _termsMissing = true);
+    if (!formOk || (_isRegister && !_acceptedTerms)) return;
     setState(() {
       _busy = true;
       _error = null;
@@ -192,6 +199,36 @@ class _AuthScreenState extends State<AuthScreen> {
                           ? 'Mật khẩu cần ít nhất 8 ký tự'
                           : _required(value, 'Vui lòng nhập mật khẩu'),
                     ),
+                    if (_isRegister) ...[
+                      const SizedBox(height: 8),
+                      CheckboxListTile(
+                        contentPadding: EdgeInsets.zero,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        value: _acceptedTerms,
+                        onChanged: (value) => setState(() {
+                          _acceptedTerms = value ?? false;
+                          _termsMissing = false;
+                        }),
+                        title: const Text('Tôi đồng ý với các điều khoản'),
+                      ),
+                      Wrap(
+                        children: [
+                          TextButton(
+                            onPressed: () => openLegal(context, termsOfService),
+                            child: const Text('Điều khoản sử dụng'),
+                          ),
+                          TextButton(
+                            onPressed: () => openLegal(context, privacyPolicy),
+                            child: const Text('Chính sách quyền riêng tư'),
+                          ),
+                        ],
+                      ),
+                      if (_termsMissing)
+                        Text(
+                          'Bạn cần đồng ý với điều khoản để đăng ký',
+                          style: TextStyle(color: colorScheme.error),
+                        ),
+                    ],
                     if (_info != null) ...[
                       const SizedBox(height: 12),
                       Text(_info!),
