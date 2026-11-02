@@ -86,6 +86,19 @@ class MockSocialApi extends SocialApi {
       const PostPage(posts: []);
 
   @override
+  Future<NotificationPage> loadNotificationCategory(
+    String category, {
+    String? cursor,
+  }) async => const NotificationPage(notifications: []);
+
+  @override
+  Future<List<Conversation>> searchConversations(String query) async =>
+      const [];
+
+  @override
+  Future<void> deleteStory(String storyId) async {}
+
+  @override
   Future<NotificationPage> loadMoreNotifications(String cursor) async =>
       const NotificationPage(notifications: []);
 

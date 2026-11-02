@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_learning/models/message.dart';
 import 'package:flutter_learning/models/user.dart';
 import 'package:flutter_learning/screens/chat_screen.dart';
+import 'package:flutter_learning/services/social_api.dart' show ApiException;
 import 'package:flutter_learning/theme/app_tokens.dart';
 import 'package:flutter_learning/widgets/post_parts.dart';
 import 'package:flutter_learning/widgets/user_avatar.dart';
@@ -23,6 +26,12 @@ class MessagesScreen extends StatefulWidget {
   final List<UserModel> Function()? friends;
   final Future<void> Function(UserModel friend)? onStartConversation;
 
+  /// Searches conversations on the server by the other person's name or
+  /// username, which also finds old ones that were not loaded. The results
+  /// are added to [conversations]. Null on the mock app.
+  final Future<List<Conversation>> Function(String query)?
+  onSearchConversations;
+
   /// Used by the 2-column Desktop chat pane.
   final UserModel? currentUser;
   final void Function(
@@ -42,6 +51,7 @@ class MessagesScreen extends StatefulWidget {
     this.refresh,
     this.friends,
     this.onStartConversation,
+    this.onSearchConversations,
     this.currentUser,
     this.onSendMessage,
     this.onSelectDesktopConversation,
@@ -58,6 +68,12 @@ class _MessagesScreenState extends State<MessagesScreen> {
   String _searchQuery = '';
   String? _selectedConversationId;
 
+  // Server search (only with onSearchConversations).
+  Timer? _debounce;
+  List<Conversation> _serverMatches = const [];
+  bool _searching = false;
+  String? _searchError;
+
   @override
   void initState() {
     super.initState();
@@ -70,6 +86,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
   @override
   void dispose() {
     widget.refresh?.removeListener(_onConversationsChanged);
+    _debounce?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -78,16 +95,61 @@ class _MessagesScreenState extends State<MessagesScreen> {
     if (mounted) setState(() {});
   }
 
+  void _onQueryChanged(String value) {
+    setState(() => _searchQuery = value);
+    if (widget.onSearchConversations == null) return;
+
+    _debounce?.cancel();
+    if (value.trim().isEmpty) {
+      setState(() {
+        _serverMatches = const [];
+        _searching = false;
+        _searchError = null;
+      });
+      return;
+    }
+    setState(() => _searching = true);
+    _debounce = Timer(const Duration(milliseconds: 400), _searchOnServer);
+  }
+
+  Future<void> _searchOnServer() async {
+    final query = _searchQuery.trim();
+    try {
+      final found = await widget.onSearchConversations!(query);
+      // A newer search replaced this one while it was running.
+      if (!mounted || _searchQuery.trim() != query) return;
+      setState(() {
+        _serverMatches = found;
+        _searching = false;
+        _searchError = null;
+      });
+    } on ApiException catch (error) {
+      if (!mounted || _searchQuery.trim() != query) return;
+      setState(() {
+        _searching = false;
+        _searchError = error.displayMessage;
+      });
+    }
+  }
+
+  /// The loaded conversations that match (name or last message), plus the
+  /// ones the server found by name or username that were not loaded.
   List<Conversation> get _filteredConversations {
     final q = _searchQuery.trim().toLowerCase();
     if (q.isEmpty) return widget.conversations;
-    return widget.conversations
+    final local = widget.conversations
         .where(
           (c) =>
               c.user.name.toLowerCase().contains(q) ||
               c.lastMessage.toLowerCase().contains(q),
         )
         .toList();
+    final known = {for (final c in local) c.id};
+    return [
+      ...local,
+      for (final c in _serverMatches)
+        if (!known.contains(c.id)) c,
+    ];
   }
 
   Future<void> _openConversation(
@@ -157,7 +219,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
           ),
           child: TextField(
             controller: _searchController,
-            onChanged: (value) => setState(() => _searchQuery = value),
+            onChanged: _onQueryChanged,
             decoration: InputDecoration(
               hintText: 'Tìm kiếm cuộc trò chuyện',
               prefixIcon: const Icon(Icons.search_rounded),
@@ -165,22 +227,26 @@ class _MessagesScreenState extends State<MessagesScreen> {
                   ? null
                   : IconButton(
                       tooltip: 'Xóa tìm kiếm hội thoại',
-                      onPressed: () => setState(() {
-                        _searchQuery = '';
+                      onPressed: () {
                         _searchController.clear();
-                      }),
+                        _onQueryChanged('');
+                      },
                       icon: const Icon(Icons.clear_rounded),
                     ),
             ),
           ),
         ),
+        if (_searching && filtered.isNotEmpty)
+          const LinearProgressIndicator(minHeight: 2),
         Expanded(
           child: filtered.isEmpty
               ? Center(
-                  child: Text(
-                    'Không tìm thấy cuộc trò chuyện',
-                    style: TextStyle(color: colorScheme.onSurfaceVariant),
-                  ),
+                  child: _searching
+                      ? const CircularProgressIndicator()
+                      : Text(
+                          _searchError ?? 'Không tìm thấy cuộc trò chuyện',
+                          style: TextStyle(color: colorScheme.onSurfaceVariant),
+                        ),
                 )
               : ListView.separated(
                   padding: const EdgeInsets.all(16),

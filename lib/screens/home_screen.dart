@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_learning/widgets/load_more_listener.dart';
 import 'package:flutter_learning/models/post.dart';
 import 'package:flutter_learning/models/post_interactions.dart';
+import 'package:flutter_learning/models/server_tab.dart';
 import 'package:flutter_learning/models/story.dart';
 import 'package:flutter_learning/models/user.dart';
 import 'package:flutter_learning/screens/story_viewer_screen.dart';
@@ -50,15 +51,14 @@ class HomeScreen extends StatefulWidget {
   /// Loads the next page when the list is scrolled near its end.
   final VoidCallback? onLoadMore;
 
-  /// The "Đang theo dõi" tab from the server: which posts belong to it
-  /// (null until it was loaded), whether it is loading, the last error, how
-  /// to load it again and how to load its next page. All null/false on the
-  /// mock app, where the tab shows the posts of friends.
-  final Set<String>? followingPostIds;
-  final bool followingLoading;
-  final String? followingError;
-  final VoidCallback? onLoadFollowing;
-  final VoidCallback? onLoadMoreFollowing;
+  /// The feed tabs that come from the server, by API name (`following`,
+  /// `media`), and how to load one (`more` asks for its next page). Both are
+  /// null on the mock app, where the tabs filter the posts it has.
+  final Map<String, ServerTabState>? serverTabs;
+  final void Function(String filter, {bool more})? onLoadTab;
+
+  /// Deletes one of my stories from the story viewer. Null on the mock app.
+  final ValueChanged<Story>? onDeleteStory;
 
   const HomeScreen({
     super.key,
@@ -81,11 +81,9 @@ class HomeScreen extends StatefulWidget {
     this.onStoryViewed,
     this.onRefresh,
     this.onLoadMore,
-    this.followingPostIds,
-    this.followingLoading = false,
-    this.followingError,
-    this.onLoadFollowing,
-    this.onLoadMoreFollowing,
+    this.serverTabs,
+    this.onLoadTab,
+    this.onDeleteStory,
   });
 
   @override
@@ -103,6 +101,8 @@ class _HomeScreenState extends State<HomeScreen> {
               stories: widget.stories,
               initialIndex: initialIndex,
               onViewed: widget.onStoryViewed,
+              currentUserId: widget.currentUser.id,
+              onDelete: widget.onDeleteStory,
             ),
         transitionsBuilder:
             (routeContext, animation, secondaryAnimation, child) {
@@ -167,6 +167,21 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
+  /// The server tab of the selected feed filter, or null when this filter
+  /// works on the loaded posts (the mock app, and "Dành cho bạn").
+  ServerTabState? get _serverTab {
+    final name = _feedFilter.apiFilter;
+    if (name == null || widget.onLoadTab == null) return null;
+    return widget.serverTabs?[name] ?? const ServerTabState();
+  }
+
+  List<Post> _fromServerTab(List<Post> posts) {
+    final ids = _serverTab!.ids;
+    return ids == null
+        ? const []
+        : posts.where((post) => ids.contains(post.id)).toList();
+  }
+
   /// widget.posts already excludes hidden posts (MainScreen removes them),
   /// so search can never bring a hidden post back.
   List<Post> get _searchResults {
@@ -176,12 +191,7 @@ class _HomeScreenState extends State<HomeScreen> {
       case HomeFeedFilter.forYou:
         return searched;
       case HomeFeedFilter.following:
-        if (widget.onLoadFollowing != null) {
-          final ids = widget.followingPostIds;
-          return ids == null
-              ? const []
-              : searched.where((post) => ids.contains(post.id)).toList();
-        }
+        if (_serverTab != null) return _fromServerTab(searched);
         return searched
             .where(
               (post) =>
@@ -190,6 +200,7 @@ class _HomeScreenState extends State<HomeScreen> {
             )
             .toList();
       case HomeFeedFilter.media:
+        if (_serverTab != null) return _fromServerTab(searched);
         return searched.where((post) => post.imageUrl != null).toList();
     }
   }
@@ -590,33 +601,32 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// "No posts" and "no search results" are different situations, so they
   /// get different messages.
-  bool get _onServerFollowingTab =>
-      !_isSearching &&
-      _feedFilter == HomeFeedFilter.following &&
-      widget.onLoadFollowing != null;
+  bool get _onServerTab => !_isSearching && _serverTab != null;
 
   Widget _buildEmptyState() {
     final colorScheme = Theme.of(context).colorScheme;
-    if (_onServerFollowingTab) {
-      if (widget.followingPostIds == null && widget.followingLoading) {
+    if (_onServerTab) {
+      final tab = _serverTab!;
+      final name = _feedFilter.apiFilter!;
+      if (tab.ids == null && tab.loading) {
         return const Padding(
           padding: EdgeInsets.all(32),
           child: Center(child: CircularProgressIndicator()),
         );
       }
-      if (widget.followingPostIds == null && widget.followingError != null) {
+      if (tab.ids == null && tab.error != null) {
         return Padding(
           padding: const EdgeInsets.all(32),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Text(
-                widget.followingError!,
+                tab.error!,
                 textAlign: TextAlign.center,
                 style: TextStyle(color: colorScheme.onSurfaceVariant),
               ),
               TextButton(
-                onPressed: widget.onLoadFollowing,
+                onPressed: () => widget.onLoadTab!(name),
                 child: const Text('Thử lại'),
               ),
             ],
@@ -626,7 +636,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return Padding(
         padding: const EdgeInsets.all(32),
         child: Text(
-          'Chưa có bài viết từ những người bạn theo dõi',
+          _feedFilter.emptyText,
           textAlign: TextAlign.center,
           style: TextStyle(color: colorScheme.onSurfaceVariant),
         ),
@@ -764,9 +774,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   visualDensity: VisualDensity.compact,
                   onSelected: (_) {
                     setState(() => _feedFilter = filter);
-                    if (filter == HomeFeedFilter.following) {
-                      widget.onLoadFollowing?.call();
-                    }
+                    final name = filter.apiFilter;
+                    if (name != null) widget.onLoadTab?.call(name);
                   },
                 ),
               ),
@@ -895,15 +904,15 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _refreshable(Widget child) {
     final onRefresh = widget.onRefresh;
     return LoadMoreListener(
-      onLoadMore: _onServerFollowingTab
-          ? widget.onLoadMoreFollowing
+      onLoadMore: _onServerTab
+          ? () => widget.onLoadTab!(_feedFilter.apiFilter!, more: true)
           : widget.onLoadMore,
       child: onRefresh == null
           ? child
           : RefreshIndicator(
               onRefresh: () async {
                 await onRefresh();
-                if (_onServerFollowingTab) widget.onLoadFollowing!();
+                if (_onServerTab) widget.onLoadTab!(_feedFilter.apiFilter!);
               },
               child: child,
             ),
@@ -916,12 +925,20 @@ const composerHint = 'Chia sẻ điều mới với mọi người…';
 
 /// Feed tabs shown above the Home post list.
 enum HomeFeedFilter {
-  forYou('Dành cho bạn'),
-  following('Đang theo dõi'),
-  media('Đa phương tiện');
+  forYou('Dành cho bạn', null, 'Chưa có bài viết'),
+  following(
+    'Đang theo dõi',
+    'following',
+    'Chưa có bài viết từ những người bạn theo dõi',
+  ),
+  media('Đa phương tiện', 'media', 'Chưa có bài viết nào có hình ảnh');
 
   final String label;
-  const HomeFeedFilter(this.label);
+
+  /// The `filter` the server knows this tab by; null for the plain feed.
+  final String? apiFilter;
+  final String emptyText;
+  const HomeFeedFilter(this.label, this.apiFilter, this.emptyText);
 }
 
 /// A small round icon inside the composer pill (decoration only; the whole

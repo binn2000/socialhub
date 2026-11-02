@@ -15,11 +15,18 @@ class StoryViewerScreen extends StatefulWidget {
   /// story it moves to).
   final ValueChanged<Story>? onViewed;
 
+  /// Deleting is offered for stories written by [currentUserId]; it closes
+  /// the viewer. Both are null on the mock app.
+  final String? currentUserId;
+  final ValueChanged<Story>? onDelete;
+
   const StoryViewerScreen({
     super.key,
     required this.stories,
     required this.initialIndex,
     this.onViewed,
+    this.currentUserId,
+    this.onDelete,
   });
 
   @override
@@ -73,6 +80,35 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
         Navigator.pop(context);
       }
     });
+  }
+
+  Future<void> _confirmDelete(Story story) async {
+    // The next story must not slide in behind the dialog.
+    _autoAdvanceTimer?.cancel();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Xóa tin này?'),
+        content: const Text('Tin sẽ bị xóa khỏi tài khoản của bạn.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Xóa'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (confirmed != true) {
+      _startAutoAdvance();
+      return;
+    }
+    widget.onDelete!(story);
+    Navigator.pop(context);
   }
 
   @override
@@ -190,6 +226,16 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                               ],
                             ),
                           ),
+                          if (widget.onDelete != null &&
+                              story.user.id == widget.currentUserId)
+                            IconButton(
+                              onPressed: () => _confirmDelete(story),
+                              tooltip: 'Xóa tin',
+                              icon: const Icon(
+                                Icons.delete_outline_rounded,
+                                color: Colors.white,
+                              ),
+                            ),
                           IconButton(
                             onPressed: () => Navigator.pop(context),
                             tooltip: 'Đóng tin',

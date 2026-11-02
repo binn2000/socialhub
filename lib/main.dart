@@ -8,6 +8,7 @@ import 'package:flutter_learning/models/message.dart';
 import 'package:flutter_learning/models/notification.dart';
 import 'package:flutter_learning/models/post.dart';
 import 'package:flutter_learning/models/post_interactions.dart';
+import 'package:flutter_learning/models/server_tab.dart';
 import 'package:flutter_learning/models/story.dart';
 import 'package:flutter_learning/models/user.dart';
 import 'package:flutter_learning/screens/auth_screen.dart';
@@ -254,13 +255,23 @@ class _MainScreenState extends State<MainScreen> {
   /// Whether the other person of the open chat is typing (from the poll).
   final ValueNotifier<bool> _partnerTyping = ValueNotifier(false);
 
-  // The "Đang theo dõi" feed tab, loaded from the server when it is opened.
-  Set<String>? _followingPostIds;
-  String? _followingCursor;
-  bool _followingLoading = false;
-  String? _followingError;
+  // Tabs that load their own list from the server when opened: the feed
+  // tabs "Đang theo dõi" (`following`) and "Đa phương tiện" (`media`), and the
+  // notification filters (`interactions`, `friends`). Keyed by the API name.
+  final Map<String, _ServerTab> _feedTabs = {
+    'following': _ServerTab(),
+    'media': _ServerTab(),
+  };
+  final Map<String, _ServerTab> _notificationTabs = {
+    'interactions': _ServerTab(),
+    'friends': _ServerTab(),
+  };
+
+  // Unread notifications according to the server (null: count the loaded ones).
+  int? _serverUnread;
 
   int get _unreadNotificationCount =>
+      _serverUnread ??
       _notifications.where((notification) => !notification.isRead).length;
 
   @override
@@ -357,6 +368,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   void _apply(AppSnapshot snapshot) {
+    _serverUnread = snapshot.unreadNotificationCount;
     _posts = List<Post>.from(snapshot.posts);
     _feedPostIds = snapshot.feedPostIds == null
         ? null
@@ -435,40 +447,120 @@ class _MainScreenState extends State<MainScreen> {
         });
       });
 
-  /// Loads the "Đang theo dõi" tab from the server: the first page when the
-  /// tab is opened (or refreshed), the next one when scrolling to the end.
-  /// The posts join [_posts] like any other, so likes and comments stay in
-  /// step; [_followingPostIds] says which of them belong to this tab.
-  Future<void> _loadFollowing({bool more = false}) async {
-    if (_followingLoading) return;
-    final cursor = more ? _followingCursor : null;
+  /// Loads a feed tab (`following`, `media`) from the server: the first page
+  /// when the tab is opened or refreshed, the next one when scrolling to the
+  /// end. The posts join [_posts] like any other, so likes and comments stay
+  /// in step; the tab only keeps which ids belong to it.
+  Future<void> _loadFeedTab(String filter, {bool more = false}) async {
+    final tab = _feedTabs[filter]!;
+    if (tab.loading) return;
+    final cursor = more ? tab.cursor : null;
     if (more && cursor == null) return;
     setState(() {
-      _followingLoading = true;
-      _followingError = null;
+      tab.loading = true;
+      tab.error = null;
     });
     try {
       final page = await _guard(
-        () => widget.api.loadFeedFilter('following', cursor: cursor),
+        () => widget.api.loadFeedFilter(filter, cursor: cursor),
       );
       if (!mounted) return;
       final ids = {for (final post in page.posts) post.id};
       setState(() {
         _addPosts(page);
-        // The tab is part of the feed, so Home lists these posts too.
+        // Every tab is part of the feed, so Home lists these posts too.
         _feedPostIds = {...?_feedPostIds, ...ids};
-        _followingPostIds = more ? {...?_followingPostIds, ...ids} : ids;
-        _followingCursor = page.nextCursor;
-        _followingLoading = false;
+        tab
+          ..ids = more ? {...?tab.ids, ...ids} : ids
+          ..cursor = page.nextCursor
+          ..loading = false;
       });
     } on ApiException catch (error) {
       if (!mounted) return;
       setState(() {
-        _followingLoading = false;
-        if (!error.isUnauthenticated) _followingError = error.displayMessage;
+        tab.loading = false;
+        if (!error.isUnauthenticated) tab.error = error.displayMessage;
       });
     }
   }
+
+  /// Same for a notification filter (`interactions`, `friends`).
+  Future<void> _loadNotificationTab(
+    String category, {
+    bool more = false,
+  }) async {
+    final tab = _notificationTabs[category]!;
+    if (tab.loading) return;
+    final cursor = more ? tab.cursor : null;
+    if (more && cursor == null) return;
+    setState(() {
+      tab.loading = true;
+      tab.error = null;
+    });
+    try {
+      final page = await _guard(
+        () => widget.api.loadNotificationCategory(category, cursor: cursor),
+      );
+      if (!mounted) return;
+      final ids = {for (final n in page.notifications) n.id};
+      setState(() {
+        final known = {for (final n in _notifications) n.id};
+        _notifications = [
+          ..._notifications,
+          for (final n in page.notifications)
+            if (!known.contains(n.id)) n,
+        ];
+        tab
+          ..ids = more ? {...?tab.ids, ...ids} : ids
+          ..cursor = page.nextCursor
+          ..loading = false;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        tab.loading = false;
+        if (!error.isUnauthenticated) tab.error = error.displayMessage;
+      });
+    }
+  }
+
+  /// Server search for the Messages screen. Conversations the app had not
+  /// loaded yet are added to [_conversations] so they can be opened.
+  Future<List<Conversation>> _searchConversations(String query) async {
+    final found = await _guard(() => widget.api.searchConversations(query));
+    if (!mounted) return const [];
+    final result = <Conversation>[];
+    for (final conversation in found) {
+      var known = _findConversation(conversation.id);
+      if (known == null) {
+        _conversations.add(conversation);
+        known = conversation;
+      }
+      result.add(known);
+    }
+    if (result.any((c) => c.messages.isEmpty)) _chatChanges.value++;
+    return result;
+  }
+
+  /// Deletes one of my stories; it disappears at once and comes back with a
+  /// message if the server refuses.
+  void _handleDeleteStory(Story story) {
+    final before = _stories;
+    setState(() => _stories = _stories.where((s) => s.id != story.id).toList());
+    _sync(
+      () => widget.api.deleteStory(story.id),
+      rollback: () => _stories = before,
+    );
+  }
+
+  Map<String, ServerTabState> _tabStates(Map<String, _ServerTab> tabs) => {
+    for (final entry in tabs.entries)
+      entry.key: ServerTabState(
+        ids: entry.value.ids,
+        loading: entry.value.loading,
+        error: entry.value.error,
+      ),
+  };
 
   Future<void> _loadMoreExplore() =>
       _loadMore('explore', _exploreCursor, (cursor, generation) async {
@@ -806,8 +898,13 @@ class _MainScreenState extends State<MainScreen> {
               _friendRequests = _friendRequests
                   .where((request) => request.id != requestId)
                   .toList();
-              _replaceUser(friend.id, (user) => user.copyWith(isFriend: true));
+              // Accepting also makes the two follow each other (server rule).
+              _replaceUser(
+                friend.id,
+                (user) => user.copyWith(isFriend: true, isFollowing: true),
+              );
             });
+            _load(silent: true); // the follower counts changed too
           }),
           onDeleteRequest: (requestId) => _guard(() async {
             await widget.api.deleteFriendRequest(requestId);
@@ -886,15 +983,24 @@ class _MainScreenState extends State<MainScreen> {
     final before = _friendRequests;
     setState(() {
       _friendRequests = before.where((r) => r.id != request.id).toList();
-      _replaceUser(request.sender.id, (user) => user.copyWith(isFriend: true));
+      // Accepting also makes the two follow each other (server rule).
+      _replaceUser(
+        request.sender.id,
+        (user) => user.copyWith(isFriend: true, isFollowing: true),
+      );
     });
     _sync(
-      () => widget.api.acceptFriendRequest(request.id),
+      () async {
+        await widget.api.acceptFriendRequest(request.id);
+        if (mounted && widget.api.isRemote) {
+          _load(silent: true); // the follower counts changed too
+        }
+      },
       rollback: () {
         _friendRequests = before;
         _replaceUser(
           request.sender.id,
-          (user) => user.copyWith(isFriend: false),
+          (user) => user.copyWith(isFriend: false, isFollowing: false),
         );
       },
     );
@@ -1093,6 +1199,9 @@ class _MainScreenState extends State<MainScreen> {
           refresh: widget.api.isRemote ? _chatChanges : null,
           friends: widget.api.isRemote ? _friendsToMessage : null,
           onStartConversation: widget.api.isRemote ? _startConversation : null,
+          onSearchConversations: widget.api.isRemote
+              ? _searchConversations
+              : null,
           currentUser: _currentUser,
           onSendMessage: _handleSendMessage,
           onPickAttachment: widget.api.isRemote ? _pickPhoto : null,
@@ -1193,6 +1302,7 @@ class _MainScreenState extends State<MainScreen> {
   void _openNotifications() {
     final hadUnread = _unreadNotificationCount > 0;
     setState(() {
+      _serverUnread = _serverUnread == null ? null : 0;
       _notifications = _notifications
           .map((notification) => _copyNotification(notification, isRead: true))
           .toList();
@@ -1703,13 +1813,11 @@ class _MainScreenState extends State<MainScreen> {
         onStoryViewed: _handleStoryViewed,
         onRefresh: widget.api.isRemote ? _refreshAll : null,
         onLoadMore: widget.api.isRemote ? _loadMoreFeed : null,
-        followingPostIds: widget.api.isRemote ? _followingPostIds : null,
-        followingLoading: _followingLoading,
-        followingError: _followingError,
-        onLoadFollowing: widget.api.isRemote ? _loadFollowing : null,
-        onLoadMoreFollowing: widget.api.isRemote
-            ? () => _loadFollowing(more: true)
+        serverTabs: widget.api.isRemote ? _tabStates(_feedTabs) : null,
+        onLoadTab: widget.api.isRemote
+            ? (filter, {bool more = false}) => _loadFeedTab(filter, more: more)
             : null,
+        onDeleteStory: widget.api.isRemote ? _handleDeleteStory : null,
       ),
       ExploreScreen(
         posts: explorePosts,
@@ -1757,6 +1865,11 @@ class _MainScreenState extends State<MainScreen> {
         onRefresh: widget.api.isRemote ? _refreshAll : null,
         onLoadMore: widget.api.isRemote ? _loadMoreNotifications : null,
         onMarkAllRead: _openNotifications,
+        serverTabs: widget.api.isRemote ? _tabStates(_notificationTabs) : null,
+        onLoadTab: widget.api.isRemote
+            ? (category, {bool more = false}) =>
+                  _loadNotificationTab(category, more: more)
+            : null,
       ),
       ProfileScreen(
         posts: _posts,
@@ -1814,4 +1927,12 @@ class _MainScreenState extends State<MainScreen> {
       ),
     );
   }
+}
+
+/// What MainScreen remembers about one server-backed tab.
+class _ServerTab {
+  Set<String>? ids;
+  String? cursor;
+  bool loading = false;
+  String? error;
 }

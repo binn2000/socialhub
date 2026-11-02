@@ -123,6 +123,10 @@ class AppSnapshot {
   final String? notificationsCursor;
   final String? usersCursor;
 
+  /// Unread notifications on the server, which can be more than the loaded
+  /// page holds. Null on the mock (the app counts the loaded ones).
+  final int? unreadNotificationCount;
+
   const AppSnapshot({
     required this.posts,
     this.feedPostIds,
@@ -138,6 +142,7 @@ class AppSnapshot {
     this.exploreCursor,
     this.notificationsCursor,
     this.usersCursor,
+    this.unreadNotificationCount,
   });
 }
 
@@ -200,6 +205,13 @@ abstract class SocialApi {
   Future<PostPage> loadFeedFilter(String filter, {String? cursor});
   Future<NotificationPage> loadMoreNotifications(String cursor);
 
+  /// A page of notifications of one [category] (`interactions` or
+  /// `friends`); [cursor] is null for the first page.
+  Future<NotificationPage> loadNotificationCategory(
+    String category, {
+    String? cursor,
+  });
+
   /// Users matching [query] (name or username); an empty query lists everyone.
   Future<UserPage> searchUsers({String query = '', String? cursor});
 
@@ -207,6 +219,9 @@ abstract class SocialApi {
   /// returns the stored version (with the server's id and time).
   Future<Post> createPost(Post draft);
   Future<Story> createStory(Story draft);
+
+  /// Deletes one of the current user's own stories.
+  Future<void> deleteStory(String storyId);
   Future<ChatMessage> sendMessage(
     String conversationId,
     ChatMessage draft, {
@@ -280,6 +295,10 @@ abstract class SocialApi {
   /// The conversation list again (without messages), for polling the
   /// Messages screen.
   Future<List<Conversation>> loadConversations();
+
+  /// Conversations whose other person's name or username contains [query]
+  /// (without messages), including old ones that were not loaded.
+  Future<List<Conversation>> searchConversations(String query);
 
   /// The conversation with a friend: the existing one, or a new empty one.
   Future<Conversation> startConversation(UserModel friend);

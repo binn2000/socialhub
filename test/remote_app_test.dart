@@ -264,10 +264,17 @@ class _FakeRemoteApi extends SocialApi {
       ].where((p) => !blocked.contains(p.author.id)).toList(),
       feedPostIds: {'p1', 'p3', ...extraPosts.map((p) => p.id)},
       stories: stories,
-      users: [me, _lan, _khang],
+      users: [
+        me,
+        for (final user in [_lan, _khang])
+          acceptedFriendIds.contains(user.id)
+              ? user.copyWith(isFriend: true)
+              : user,
+      ],
       conversations: List.of(conversations),
       notifications: notifications,
       friendRequests: incomingRequests,
+      unreadNotificationCount: serverUnread,
       feedCursor: feedCursor,
       exploreCursor: exploreCursor,
       notificationsCursor: notificationsCursor,
@@ -391,6 +398,7 @@ class _FakeRemoteApi extends SocialApi {
 
   // --- friend requests, comments, shares, profiles ---
   List<FriendRequest> incomingRequests = [];
+  final acceptedFriendIds = <String>{};
   final acceptedRequests = <String>[];
   final deletedRequests = <String>[];
   final unfriended = <String>[];
@@ -419,6 +427,9 @@ class _FakeRemoteApi extends SocialApi {
   final extraPosts = <Post>[];
   List<Story> stories = const [];
   List<SocialNotification> notifications = const [];
+
+  /// What the server says about unread notifications (null: not sent).
+  int? serverUnread;
   ApiException? profileError;
   UserProfile? profileToShow;
   final profilesLoaded = <String>[];
@@ -427,6 +438,9 @@ class _FakeRemoteApi extends SocialApi {
   Future<UserModel> acceptFriendRequest(String requestId) async {
     acceptedRequests.add(requestId);
     final request = incomingRequests.firstWhere((r) => r.id == requestId);
+    // Like the server, an accepted request is no longer waiting.
+    incomingRequests.removeWhere((r) => r.id == requestId);
+    acceptedFriendIds.add(request.sender.id);
     return request.sender;
   }
 
@@ -512,7 +526,43 @@ class _FakeRemoteApi extends SocialApi {
   Future<PostPage> loadFeedFilter(String filter, {String? cursor}) async {
     feedFilterCalls.add('$filter:${cursor ?? ''}');
     if (listError != null) throw listError!;
-    return followingPages[cursor == null ? 0 : int.parse(cursor.substring(1))];
+    final pages = filter == 'media' ? mediaPages : followingPages;
+    return pages[cursor == null ? 0 : int.parse(cursor.substring(1))];
+  }
+
+  var mediaPages = <PostPage>[];
+
+  var categoryPages = <NotificationPage>[];
+  final notificationCalls = <String>[];
+
+  @override
+  Future<NotificationPage> loadNotificationCategory(
+    String category, {
+    String? cursor,
+  }) async {
+    notificationCalls.add('$category:${cursor ?? ''}');
+    if (listError != null) throw listError!;
+    return categoryPages[cursor == null ? 0 : int.parse(cursor.substring(1))];
+  }
+
+  /// Conversations the server finds for a search, by query text.
+  final conversationSearchResults = <String, List<Conversation>>{};
+  final conversationSearches = <String>[];
+
+  @override
+  Future<List<Conversation>> searchConversations(String query) async {
+    conversationSearches.add(query);
+    if (listError != null) throw listError!;
+    return conversationSearchResults[query] ?? const [];
+  }
+
+  final deletedStories = <String>[];
+  ApiException? storyDeleteError;
+
+  @override
+  Future<void> deleteStory(String storyId) async {
+    if (storyDeleteError != null) throw storyDeleteError!;
+    deletedStories.add(storyId);
   }
 
   @override
@@ -979,6 +1029,24 @@ void main() {
       expect(find.text('Lời mời kết bạn (1)'), findsNothing);
       // Duy Khang is now in the list with "Bạn bè", like Lan.
       expect(find.text('Bạn bè'), findsNWidgets(2));
+    });
+
+    testWidgets('accepting reloads, because the two now follow each other', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..incomingRequests = [request()];
+      await _pump(tester, api);
+      expect(api.loadCalls, 1);
+
+      await tapTab(tester, friendsTab);
+      await tester.tap(find.widgetWithText(FilledButton, 'Chấp nhận'));
+      await tester.pumpAndSettle();
+
+      expect(
+        api.loadCalls,
+        2,
+      ); // counts and the "Đang theo dõi" feed follow the server
     });
 
     testWidgets('declining removes the request', (tester) async {
@@ -3877,6 +3945,359 @@ void main() {
         find.text('Chưa có bài viết từ những người bạn theo dõi'),
         findsNothing,
       );
+    });
+  });
+
+  group('media tab, notification filters, conversation search', () {
+    PostPage postPage(List<Post> posts, {String? next}) =>
+        PostPage(posts: posts, nextCursor: next);
+
+    NotificationPage notificationPage(
+      List<SocialNotification> items, {
+      String? next,
+    }) => NotificationPage(notifications: items, nextCursor: next);
+
+    group('"Đa phương tiện"', () {
+      testWidgets('is loaded from the server', (tester) async {
+        final api = _FakeRemoteApi(sessionUser: _me)
+          ..mediaPages = [
+            postPage([_post('m9', 'Bài có ảnh từ server')]),
+          ];
+        await _pump(tester, api);
+
+        await tester.tap(find.widgetWithText(ChoiceChip, 'Đa phương tiện'));
+        await tester.pumpAndSettle();
+
+        expect(api.feedFilterCalls, ['media:']);
+        expect(find.text('Bài có ảnh từ server'), findsOneWidget);
+        expect(find.text('Bài trên bảng tin'), findsNothing);
+      });
+
+      testWidgets('says so when there is nothing and can retry', (
+        tester,
+      ) async {
+        final api = _FakeRemoteApi(sessionUser: _me)
+          ..listError = const ApiException(
+            code: 'network_error',
+            message: 'Không thể kết nối tới máy chủ',
+          );
+        await _pump(tester, api);
+        await tester.tap(find.widgetWithText(ChoiceChip, 'Đa phương tiện'));
+        await tester.pumpAndSettle();
+        expect(find.text('Không thể kết nối tới máy chủ'), findsOneWidget);
+
+        api
+          ..listError = null
+          ..mediaPages = [postPage([])];
+        await tester.tap(find.text('Thử lại'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Chưa có bài viết nào có hình ảnh'), findsOneWidget);
+      });
+    });
+
+    group('notification filters', () {
+      Future<void> openNotifications(WidgetTester tester) =>
+          tapTab(tester, notificationsTab);
+
+      List<SocialNotification> loaded() => [
+        _notification(id: 'n1', type: 'friend', actor: _khang),
+      ];
+
+      testWidgets('ask the server and show older ones that were not loaded', (
+        tester,
+      ) async {
+        final api = _FakeRemoteApi(sessionUser: _me)
+          ..notifications = loaded()
+          ..categoryPages = [
+            notificationPage([
+              _notification(id: 'n0', type: 'like', actor: _lan, postId: 'p1'),
+            ]),
+          ];
+        await _pump(tester, api);
+        await openNotifications(tester);
+
+        await tester.tap(find.widgetWithText(ChoiceChip, 'Tương tác'));
+        await tester.pumpAndSettle();
+
+        expect(api.notificationCalls, ['interactions:']);
+        expect(
+          find.textContaining('Lan Hương'),
+          findsOneWidget,
+        ); // older, found by the server
+        expect(
+          find.textContaining('Duy Khang'),
+          findsNothing,
+        ); // a friend notification
+
+        await tester.tap(find.widgetWithText(ChoiceChip, 'Tất cả'));
+        await tester.pumpAndSettle();
+        expect(find.textContaining('Duy Khang'), findsOneWidget);
+        expect(find.textContaining('Lan Hương'), findsOneWidget);
+      });
+
+      testWidgets('an error offers a retry; an empty filter says so', (
+        tester,
+      ) async {
+        final api = _FakeRemoteApi(sessionUser: _me)
+          ..notifications = loaded()
+          ..listError = const ApiException(
+            code: 'network_error',
+            message: 'Không thể kết nối tới máy chủ',
+          );
+        await _pump(tester, api);
+        await openNotifications(tester);
+        await tester.tap(find.widgetWithText(ChoiceChip, 'Kết bạn'));
+        await tester.pumpAndSettle();
+        expect(find.text('Không thể kết nối tới máy chủ'), findsOneWidget);
+
+        api
+          ..listError = null
+          ..categoryPages = [notificationPage([])];
+        await tester.tap(find.text('Thử lại'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Không có thông báo'), findsOneWidget);
+        expect(api.notificationCalls, ['friends:', 'friends:']);
+      });
+
+      testWidgets('the mock app filters what it has', (tester) async {
+        await pumpSocialHub(tester);
+        await tapTab(tester, notificationsTab);
+
+        await tester.tap(find.widgetWithText(ChoiceChip, 'Tương tác'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Không thể kết nối tới máy chủ'), findsNothing);
+      });
+    });
+
+    group('conversation search', () {
+      _FakeRemoteApi api0() =>
+          _FakeRemoteApi(sessionUser: _me)
+            ..conversations = [
+              Conversation(
+                id: 'c1',
+                user: _lan,
+                lastMessage: 'tin cũ',
+                time: '1 giờ trước',
+                unreadCount: 0,
+                messages: const [],
+              ),
+            ];
+
+      Future<void> search(WidgetTester tester, String text) async {
+        await tester.enterText(
+          find.widgetWithText(TextField, 'Tìm kiếm cuộc trò chuyện'),
+          text,
+        );
+        await tester.pump(const Duration(milliseconds: 450));
+        await tester.pumpAndSettle();
+      }
+
+      testWidgets('finds an old conversation the app had not loaded', (
+        tester,
+      ) async {
+        final api = api0()
+          ..conversationSearchResults['khang'] = [
+            Conversation(
+              id: 'c9',
+              user: _khang,
+              lastMessage: 'tin rất cũ',
+              time: '3 tháng trước',
+              unreadCount: 0,
+              messages: const [],
+            ),
+          ];
+        await _pump(tester, api);
+        await openMessagesFromHome(tester);
+
+        await search(tester, 'khang');
+
+        expect(api.conversationSearches, ['khang']);
+        expect(find.text('Duy Khang'), findsOneWidget);
+        expect(find.text('Lan Hương'), findsNothing); // not a match
+      });
+
+      testWidgets('keeps matching loaded ones locally, without duplicates', (
+        tester,
+      ) async {
+        final api = api0()
+          ..conversationSearchResults['lan'] = [api0().conversations.first];
+        await _pump(tester, api);
+        await openMessagesFromHome(tester);
+
+        await search(tester, 'lan');
+
+        expect(find.text('Lan Hương'), findsOneWidget);
+      });
+
+      testWidgets(
+        'typing quickly searches once, and clearing restores the list',
+        (tester) async {
+          final api = api0();
+          await _pump(tester, api);
+          await openMessagesFromHome(tester);
+          final field = find.widgetWithText(
+            TextField,
+            'Tìm kiếm cuộc trò chuyện',
+          );
+
+          await tester.enterText(field, 'k');
+          await tester.pump(const Duration(milliseconds: 100));
+          await tester.enterText(field, 'kh');
+          await tester.pump(const Duration(milliseconds: 450));
+          await tester.pumpAndSettle();
+          expect(api.conversationSearches, ['kh']);
+          expect(find.text('Không tìm thấy cuộc trò chuyện'), findsOneWidget);
+
+          await tester.tap(find.byTooltip('Xóa tìm kiếm hội thoại'));
+          await tester.pumpAndSettle();
+          expect(find.text('Lan Hương'), findsOneWidget);
+        },
+      );
+
+      testWidgets('a failure is shown', (tester) async {
+        final api = api0()
+          ..listError = const ApiException(
+            code: 'network_error',
+            message: 'Không thể kết nối tới máy chủ',
+          );
+        await _pump(tester, api);
+        await openMessagesFromHome(tester);
+
+        await search(tester, 'zzz');
+
+        expect(find.text('Không thể kết nối tới máy chủ'), findsOneWidget);
+      });
+    });
+  });
+
+  group('unread badge and deleting a story', () {
+    Finder badge(int count) =>
+        find.descendant(of: find.byType(Badge), matching: find.text('$count'));
+
+    testWidgets('the badge uses the server count, not the loaded page', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..serverUnread = 7
+        ..notifications = [
+          _notification(id: 'n1', type: 'like', actor: _lan, postId: 'p1'),
+        ];
+      await _pump(tester, api);
+
+      expect(badge(7), findsOneWidget);
+    });
+
+    testWidgets('opening the Notifications tab clears the badge', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..serverUnread = 3
+        ..notifications = [
+          _notification(id: 'n1', type: 'like', actor: _lan, postId: 'p1'),
+        ];
+      await _pump(tester, api);
+      expect(badge(3), findsOneWidget);
+
+      await tapTab(tester, notificationsTab);
+
+      expect(find.byType(Badge), findsNothing);
+    });
+
+    testWidgets('without a server count the loaded ones are counted', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..notifications = [
+          _notification(id: 'n1', type: 'like', actor: _lan, postId: 'p1'),
+          _notification(id: 'n2', type: 'like', actor: _khang, postId: 'p1'),
+        ];
+      await _pump(tester, api);
+
+      expect(badge(2), findsOneWidget);
+    });
+
+    Future<void> openOwnStory(WidgetTester tester) async {
+      await tester.tap(find.byType(StoryItem).at(1));
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump();
+    }
+
+    testWidgets('my story can be deleted after confirming', (tester) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..stories = [_story('s1', _me)];
+      await _pump(tester, api);
+      await openOwnStory(tester);
+
+      await tester.tap(find.byTooltip('Xóa tin'));
+      await tester.pumpAndSettle();
+      expect(find.text('Xóa tin này?'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, 'Xóa'));
+      await tester.pumpAndSettle();
+
+      expect(api.deletedStories, ['s1']);
+      expect(find.byTooltip('Đóng tin'), findsNothing); // the viewer closed
+      expect(
+        find.byType(StoryItem),
+        findsOneWidget,
+      ); // only "add story" is left
+    });
+
+    testWidgets('cancelling keeps the story', (tester) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..stories = [_story('s1', _me)];
+      await _pump(tester, api);
+      await openOwnStory(tester);
+
+      await tester.tap(find.byTooltip('Xóa tin'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Hủy'));
+      await tester.pumpAndSettle();
+
+      expect(api.deletedStories, isEmpty);
+      expect(find.byTooltip('Đóng tin'), findsOneWidget);
+    });
+
+    testWidgets("someone else's story has no delete button", (tester) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..stories = [_story('s1', _lan)];
+      await _pump(tester, api);
+      await openOwnStory(tester);
+
+      expect(find.byTooltip('Xóa tin'), findsNothing);
+    });
+
+    testWidgets('a refused delete brings the story back with the reason', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..stories = [_story('s1', _me)]
+        ..storyDeleteError = const ApiException(
+          statusCode: 500,
+          code: 'server_error',
+          message: 'Máy chủ gặp lỗi, hãy thử lại sau.',
+        );
+      await _pump(tester, api);
+      await openOwnStory(tester);
+
+      await tester.tap(find.byTooltip('Xóa tin'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Xóa'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Máy chủ gặp lỗi, hãy thử lại sau.'), findsOneWidget);
+      expect(find.byType(StoryItem), findsNWidgets(2)); // back
+    });
+
+    testWidgets('the mock app has no delete button', (tester) async {
+      await pumpSocialHub(tester);
+      await tester.tap(find.byType(StoryItem).at(1));
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump();
+
+      expect(find.byTooltip('Xóa tin'), findsNothing);
     });
   });
 

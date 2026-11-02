@@ -630,7 +630,9 @@ paths:
       summary: Follow a user
       description: |
         **Authentication:** required. **Idempotent.** Following is one-way and needs no approval. It is separate from
-        friendship (a friend can also be followed). The followed person gets one `follow` notification. A followed
+        friendship, but friends follow each other automatically when a friend request is accepted (and every pair of
+        friends from before that rule was added was made to follow each other once). Unfriending does not remove
+        a follow; unfollowing does not end a friendship. The followed person gets one `follow` notification. A followed
         person's **public** posts appear in the follower's feed (`filter=all` and `filter=following`). Following
         yourself is `422`; a user who blocked the caller, or whom the caller blocked, is `404`. Blocking someone
         removes follows in both directions. Limited like friend requests (60 per hour).
@@ -1006,7 +1008,9 @@ paths:
       summary: "[NEW] Accept a friend request"
       description: |
         **Authentication:** required. **Authorization:** only the **receiver** of the request. Anyone else gets `404`.
-        Turns the request into a friendship and creates a `friend_accepted` notification for the sender.
+        Turns the request into a friendship and creates a `friend_accepted` notification for the sender. The two
+        people also start following each other (no `follow` notification; a follow that already exists is kept,
+        and it stays when they stop being friends later).
         Returns the sender's profile with `friendship.status = friends`. Accepting an already accepted request is
         idempotent and returns the same profile.
 
@@ -1075,7 +1079,7 @@ paths:
         **Search:** `q` filters the feed by post content or author name (Home search). Hidden posts never come back
         through search.
 
-        **Followed people:** the public posts of people the caller follows (not friends) also appear. **Tabs (`filter`):** `all` (default) is the list above. `friends` keeps only the posts of accepted friends. `following` keeps only the posts of people the caller follows.
+        **Followed people:** the public posts of people the caller follows (not friends) also appear. **Tabs (`filter`):** `all` (default) is the list above. `friends` keeps only the posts of accepted friends. `following` keeps only the posts of people the caller follows (explicit follows only: being friends does not count). `media` keeps only the posts that have at least one image.
         `popular` keeps the last 7 days and sorts by likes (then `id`), like Explore's trending, but only over the
         posts of this feed. The cursor of one filter is rejected on another.
 
@@ -1086,7 +1090,7 @@ paths:
           schema: {type: string, maxLength: 100}
         - name: filter
           in: query
-          schema: {type: string, enum: [all, friends, following, popular], default: all}
+          schema: {type: string, enum: [all, friends, following, media, popular], default: all}
         - {$ref: '#/components/parameters/Cursor'}
         - {$ref: '#/components/parameters/Limit'}
       responses:

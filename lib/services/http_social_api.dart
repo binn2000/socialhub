@@ -308,11 +308,23 @@ class HttpSocialApi extends SocialApi {
         for (final request in _list(responses[6]))
           friendRequestFromJson(request, absoluteUrl: _absoluteUrl),
       ],
+      unreadNotificationCount: await _unreadNotificationCount(),
       feedCursor: _nextCursor(responses[0]),
       exploreCursor: _nextCursor(responses[1]),
       notificationsCursor: _nextCursor(responses[5]),
       usersCursor: _nextCursor(responses[3]),
     );
+  }
+
+  /// How many notifications are unread on the server. A failure only means
+  /// the badge counts the loaded ones, so it does not fail the whole load.
+  Future<int?> _unreadNotificationCount() async {
+    try {
+      final response = await _request('GET', '/notifications/unread-count');
+      return (response['data'] as Json?)?['count'] as int?;
+    } on ApiException {
+      return null;
+    }
   }
 
   String? _nextCursor(Json page) =>
@@ -353,11 +365,23 @@ class HttpSocialApi extends SocialApi {
       _postPage('/explore', cursor);
 
   @override
-  Future<NotificationPage> loadMoreNotifications(String cursor) async {
+  Future<NotificationPage> loadMoreNotifications(String cursor) =>
+      _notificationPage(cursor: cursor);
+
+  @override
+  Future<NotificationPage> loadNotificationCategory(
+    String category, {
+    String? cursor,
+  }) => _notificationPage(cursor: cursor, category: category);
+
+  Future<NotificationPage> _notificationPage({
+    String? cursor,
+    String? category,
+  }) async {
     final response = await _request(
       'GET',
       '/notifications',
-      query: {'limit': _moreLimit, 'cursor': cursor},
+      query: {'limit': _moreLimit, 'cursor': ?cursor, 'category': ?category},
     );
     return NotificationPage(
       notifications: [
@@ -927,4 +951,21 @@ class HttpSocialApi extends SocialApi {
   @override
   Future<UserModel> setShowOnlineStatus(bool show) async =>
       _me(await _request('PATCH', '/me', data: {'showOnlineStatus': show}));
+
+  @override
+  Future<List<Conversation>> searchConversations(String query) async => [
+    for (final conversation in _list(
+      await _request(
+        'GET',
+        '/conversations',
+        query: {'limit': 50, 'q': query.trim()},
+      ),
+    ))
+      conversationFromJson(conversation, absoluteUrl: _absoluteUrl),
+  ];
+
+  @override
+  Future<void> deleteStory(String storyId) async {
+    await _request('DELETE', '/stories/$storyId');
+  }
 }

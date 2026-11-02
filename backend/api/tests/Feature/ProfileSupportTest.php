@@ -354,6 +354,22 @@ class ProfileSupportTest extends TestCase
         $this->getJson('/api/v1/feed?filter=trending')->assertStatus(422)->assertJsonStructure(['errors' => ['filter']]);
     }
 
+    public function test_the_media_tab_keeps_only_posts_with_images(): void
+    {
+        [$me, $friend] = User::factory()->count(2)->create();
+        $this->befriend($me, $friend);
+        $withImage = $this->makePost($friend, ['image_path' => 'posts/a.jpg', 'created_at' => now()->subMinutes(2)]);
+        $own = $this->makePost($me, ['image_path' => 'posts/b.jpg', 'created_at' => now()->subMinute()]);
+        $this->makePost($friend, ['content' => 'text only']);
+        $this->actingAs($me, 'sanctum');
+
+        $this->assertSame([$own->id, $withImage->id], $this->ids($this->getJson('/api/v1/feed?filter=media')->assertOk()->json()));
+
+        $first = $this->getJson('/api/v1/feed?filter=media&limit=1')->json();
+        $this->assertTrue($first['meta']['hasMore']);
+        $this->getJson('/api/v1/feed?filter=all&limit=1&cursor='.urlencode($first['meta']['nextCursor']))->assertStatus(400);
+    }
+
     public function test_feed_tab_pages_and_cursors_are_not_interchangeable(): void
     {
         [$me, $friend] = User::factory()->count(2)->create();

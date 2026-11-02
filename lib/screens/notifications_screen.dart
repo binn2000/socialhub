@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_learning/models/notification.dart';
+import 'package:flutter_learning/models/server_tab.dart';
 import 'package:flutter_learning/theme/app_tokens.dart';
 import 'package:flutter_learning/widgets/load_more_listener.dart';
 import 'package:flutter_learning/widgets/post_parts.dart';
@@ -7,12 +8,15 @@ import 'package:flutter_learning/widgets/user_avatar.dart';
 
 /// Filter pills on the Notifications screen (4.7).
 enum NotificationFilter {
-  all('Tất cả'),
-  interactions('Tương tác'),
-  friends('Kết bạn');
+  all('Tất cả', null),
+  interactions('Tương tác', 'interactions'),
+  friends('Kết bạn', 'friends');
 
   final String label;
-  const NotificationFilter(this.label);
+
+  /// The `category` the server knows this filter by; null for everything.
+  final String? category;
+  const NotificationFilter(this.label, this.category);
 }
 
 class NotificationsScreen extends StatefulWidget {
@@ -28,6 +32,12 @@ class NotificationsScreen extends StatefulWidget {
   /// Explicitly marks all notifications as read.
   final VoidCallback? onMarkAllRead;
 
+  /// The filters that come from the server, by category name, and how to
+  /// load one (`more` asks for its next page). Null on the mock app, where
+  /// the filters work on the notifications it has.
+  final Map<String, ServerTabState>? serverTabs;
+  final void Function(String category, {bool more})? onLoadTab;
+
   const NotificationsScreen({
     super.key,
     required this.notifications,
@@ -35,6 +45,8 @@ class NotificationsScreen extends StatefulWidget {
     this.onRefresh,
     this.onLoadMore,
     this.onMarkAllRead,
+    this.serverTabs,
+    this.onLoadTab,
   });
 
   @override
@@ -44,7 +56,22 @@ class NotificationsScreen extends StatefulWidget {
 class _NotificationsScreenState extends State<NotificationsScreen> {
   NotificationFilter _filter = NotificationFilter.all;
 
+  /// The server tab of the selected filter, or null when this filter works
+  /// on the loaded notifications.
+  ServerTabState? get _serverTab {
+    final category = _filter.category;
+    if (category == null || widget.onLoadTab == null) return null;
+    return widget.serverTabs?[category] ?? const ServerTabState();
+  }
+
   List<SocialNotification> get _visibleNotifications {
+    final tab = _serverTab;
+    if (tab != null) {
+      final ids = tab.ids;
+      return ids == null
+          ? const []
+          : widget.notifications.where((n) => ids.contains(n.id)).toList();
+    }
     switch (_filter) {
       case NotificationFilter.all:
         return widget.notifications;
@@ -120,7 +147,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                   : palette.border,
                             ),
                             visualDensity: VisualDensity.compact,
-                            onSelected: (_) => setState(() => _filter = filter),
+                            onSelected: (_) {
+                              setState(() => _filter = filter);
+                              final category = filter.category;
+                              if (category != null) {
+                                widget.onLoadTab?.call(category);
+                              }
+                            },
                           ),
                         ),
                     ],
@@ -247,12 +280,31 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 
   Widget _empty(ColorScheme colorScheme) {
-    final message = Center(
-      child: Text(
+    final tab = _serverTab;
+    final Widget content;
+    if (tab != null && tab.ids == null && tab.loading) {
+      content = const CircularProgressIndicator();
+    } else if (tab != null && tab.ids == null && tab.error != null) {
+      content = Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            tab.error!,
+            style: TextStyle(color: colorScheme.onSurfaceVariant),
+          ),
+          TextButton(
+            onPressed: () => widget.onLoadTab!(_filter.category!),
+            child: const Text('Thử lại'),
+          ),
+        ],
+      );
+    } else {
+      content = Text(
         'Không có thông báo',
         style: TextStyle(color: colorScheme.onSurfaceVariant),
-      ),
-    );
+      );
+    }
+    final message = Center(child: content);
     // A list that fills the screen, so pulling down still reaches the
     // refresh indicator when there is nothing to show.
     return widget.onRefresh == null
@@ -267,11 +319,20 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
   Widget _refreshable(Widget child) {
     final refresh = widget.onRefresh;
+    final onServerTab = _serverTab != null;
     return LoadMoreListener(
-      onLoadMore: widget.onLoadMore,
+      onLoadMore: onServerTab
+          ? () => widget.onLoadTab!(_filter.category!, more: true)
+          : widget.onLoadMore,
       child: refresh == null
           ? child
-          : RefreshIndicator(onRefresh: refresh, child: child),
+          : RefreshIndicator(
+              onRefresh: () async {
+                await refresh();
+                if (onServerTab) widget.onLoadTab!(_filter.category!);
+              },
+              child: child,
+            ),
     );
   }
 }

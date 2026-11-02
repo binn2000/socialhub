@@ -111,7 +111,7 @@ class PostController extends Controller
     {
         $request->validate([
             'q' => ['nullable', 'string', 'max:100'],
-            'filter' => ['nullable', Rule::in(['all', 'friends', 'following', 'popular'])],
+            'filter' => ['nullable', Rule::in(['all', 'friends', 'following', 'media', 'popular'])],
         ]);
         $q = trim((string) $request->query('q', ''));
         $filter = $request->query('filter', 'all');
@@ -121,6 +121,7 @@ class PostController extends Controller
         return match ($filter) {
             'friends' => self::page($request, $query->fromFriends($request->user()), $scope),
             'following' => self::page($request, $query->whereIn('posts.user_id', fn ($s) => $s->select('followee_id')->from('follows')->where('follower_id', $request->user()->id)), $scope),
+            'media' => self::page($request, $query->whereNotNull('posts.image_path'), $scope),
             'popular' => ExploreController::trending($request, $query, $scope),
             default => self::page($request, $query, $scope),
         };

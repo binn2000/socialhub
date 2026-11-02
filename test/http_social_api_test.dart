@@ -733,6 +733,67 @@ void main() {
     ]);
   });
 
+  test('notification filters, conversation search and story delete', () async {
+    adapter.routes['GET /notifications'] = (200, _page([]));
+    adapter.routes['GET /conversations'] = (200, _page([]));
+    adapter.routes['DELETE /stories/s1'] = (204, null);
+    await tokens.write('t');
+
+    final page = await api.loadNotificationCategory('friends', cursor: 'abc');
+    final found = await api.searchConversations('  lan ');
+    await api.deleteStory('s1');
+
+    expect(page.notifications, isEmpty);
+    expect(
+      adapter.requests
+          .firstWhere((r) => r.path == '/notifications')
+          .queryParameters,
+      {'limit': 30, 'cursor': 'abc', 'category': 'friends'},
+    );
+    expect(found, isEmpty);
+    expect(
+      adapter.requests
+          .firstWhere((r) => r.path == '/conversations')
+          .queryParameters,
+      {'limit': 50, 'q': 'lan'},
+    );
+    expect(
+      adapter.requests.any(
+        (r) => r.method == 'DELETE' && r.path == '/stories/s1',
+      ),
+      isTrue,
+    );
+  });
+
+  test('load reads the unread count and survives it failing', () async {
+    for (final path in [
+      '/feed',
+      '/explore',
+      '/stories',
+      '/users',
+      '/conversations',
+      '/notifications',
+      '/friend-requests',
+    ]) {
+      adapter.routes['GET $path'] = (200, _page([]));
+    }
+    adapter.routes['GET /notifications/unread-count'] = (
+      200,
+      {
+        'data': {'count': 9},
+      },
+    );
+    final me = await _signedInUser(api, adapter, tokens);
+
+    expect((await api.load(me)).unreadNotificationCount, 9);
+
+    adapter.routes['GET /notifications/unread-count'] = (
+      500,
+      {'message': 'x', 'code': 'server_error'},
+    );
+    expect((await api.load(me)).unreadNotificationCount, isNull);
+  });
+
   test('polling reports whether the other person is typing', () async {
     adapter.routes['GET /conversations/c1/messages'] = (
       200,

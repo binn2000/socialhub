@@ -106,6 +106,12 @@ class FriendController extends Controller
 
             if ($changed) {
                 $this->notify($friendship->requester_id, $me->id, 'friend_accepted', $friendship->id);
+
+                // New friends follow each other. Quietly: no follow notification, they have just been told
+                // about the friendship. Follows that exist are kept, and unfriending later keeps them too.
+                foreach ([[$friendship->requester_id, $friendship->addressee_id], [$friendship->addressee_id, $friendship->requester_id]] as [$follower, $followee]) {
+                    DB::table('follows')->insertOrIgnore(['follower_id' => $follower, 'followee_id' => $followee, 'created_at' => now()]);
+                }
             }
         });
 
