@@ -35,5 +35,9 @@
     "You cannot report yourself.": "Bạn không thể tự báo cáo mình.",
     "A message needs text or an attachment.": "Tin nhắn cần có chữ hoặc tệp đính kèm.",
     "Send either image or images, not both.": "Chỉ gửi image hoặc images, không gửi cả hai.",
-    "You cannot follow yourself.": "Bạn không thể tự theo dõi mình."
+    "You cannot follow yourself.": "Bạn không thể tự theo dõi mình.",
+    "A note cannot be empty.": "Ghi chú không được để trống.",
+    "A note can have at most :max characters.": "Ghi chú tối đa :max ký tự.",
+    "Music is not available right now.": "Hiện chưa dùng được nhạc, hãy thử lại sau.",
+    "This song was not found.": "Không tìm thấy bài hát này."
 }

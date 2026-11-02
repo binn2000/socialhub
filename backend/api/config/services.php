@@ -34,6 +34,17 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    // Songs for notes and stories: the Apple Music / iTunes catalogue gives the 30-second
+    // previews (no key needed); Spotify only adds a link to the same song.
+    'music' => [
+        'country' => env('MUSIC_COUNTRY', 'VN'),
+    ],
+
+    'spotify' => [
+        'client_id' => env('SPOTIFY_CLIENT_ID'),
+        'client_secret' => env('SPOTIFY_CLIENT_SECRET'),
+    ],
+
     'slack' => [
         'notifications' => [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),

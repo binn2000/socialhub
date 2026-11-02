@@ -1,7 +1,11 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_learning/models/music_track.dart';
 import 'package:flutter_learning/models/story.dart';
+import 'package:flutter_learning/services/audio_preview.dart';
+import 'package:flutter_learning/widgets/privacy_sheet.dart';
+import 'package:flutter_learning/widgets/track_picker.dart';
 import 'package:flutter_learning/models/user.dart';
 
 class StoryCreatorScreen extends StatefulWidget {
@@ -12,11 +16,22 @@ class StoryCreatorScreen extends StatefulWidget {
   /// the story is text on a coloured background only.
   final Future<String?> Function()? onPickPhoto;
 
+  /// Finds songs to put under the story (server only, null hides the
+  /// button) and plays their previews.
+  final Future<List<MusicTrack>> Function(String query)? onSearchMusic;
+  final AudioPreview audio;
+
+  /// Offers the "Ai xem được" choice (server only; the mock has no audience).
+  final bool showPrivacy;
+
   const StoryCreatorScreen({
     super.key,
     required this.currentUser,
     required this.onStoryCreated,
     this.onPickPhoto,
+    this.onSearchMusic,
+    this.audio = const NoAudioPreview(),
+    this.showPrivacy = false,
   });
 
   @override
@@ -27,6 +42,8 @@ class _StoryCreatorScreenState extends State<StoryCreatorScreen> {
   final TextEditingController _controller = TextEditingController();
   int _selectedColor = 0;
   String? _photoPath;
+  MusicTrack? _track;
+  String _privacy = 'Bạn bè';
 
   static const _backgrounds = [
     [Color(0xFF5D6BFF), Color(0xFF9B8CFF)],
@@ -47,6 +64,20 @@ class _StoryCreatorScreenState extends State<StoryCreatorScreen> {
     setState(() => _photoPath = path);
   }
 
+  Future<void> _pickTrack() async {
+    final track = await showTrackPicker(
+      context,
+      search: widget.onSearchMusic!,
+      audio: widget.audio,
+    );
+    if (track != null && mounted) setState(() => _track = track);
+  }
+
+  Future<void> _pickPrivacy() async {
+    final label = await showPrivacySheet(context, current: _privacy);
+    if (label != null && mounted) setState(() => _privacy = label);
+  }
+
   void _publish() {
     final text = _controller.text.trim();
     if (text.isEmpty && _photoPath == null) return;
@@ -58,6 +89,8 @@ class _StoryCreatorScreenState extends State<StoryCreatorScreen> {
         text: text.isEmpty ? null : text,
         isViewed: false,
         gradientColors: _backgrounds[_selectedColor],
+        track: _track,
+        privacy: _privacy,
       ),
     );
     Navigator.pop(context);
@@ -178,6 +211,37 @@ class _StoryCreatorScreenState extends State<StoryCreatorScreen> {
                 ),
               ),
             ),
+            if (widget.showPrivacy)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: ActionChip(
+                    avatar: Icon(
+                      privacyOptions.firstWhere((o) => o.$1 == _privacy).$2,
+                      size: 18,
+                    ),
+                    label: Text('Ai xem được: $_privacy'),
+                    tooltip: 'Chọn người xem tin',
+                    onPressed: _pickPrivacy,
+                  ),
+                ),
+              ),
+            if (_track != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                child: InputChip(
+                  avatar: const Icon(Icons.music_note_rounded, size: 18),
+                  label: Text(
+                    '${_track!.title} · ${_track!.artist}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  deleteButtonTooltipMessage: 'Bỏ nhạc',
+                  onDeleted: () => setState(() => _track = null),
+                  onPressed: _pickTrack,
+                ),
+              ),
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
               child: Row(
@@ -214,8 +278,19 @@ class _StoryCreatorScreenState extends State<StoryCreatorScreen> {
                       ),
                     );
                   }),
-                  if (widget.onPickPhoto != null) ...[
+                  if (widget.onPickPhoto != null ||
+                      widget.onSearchMusic != null)
                     const Spacer(),
+                  if (widget.onSearchMusic != null)
+                    IconButton(
+                      tooltip: _track == null ? 'Thêm nhạc' : 'Đổi nhạc',
+                      onPressed: _pickTrack,
+                      icon: const Icon(
+                        Icons.music_note_rounded,
+                        color: Colors.white,
+                      ),
+                    ),
+                  if (widget.onPickPhoto != null) ...[
                     if (_photoPath != null)
                       IconButton(
                         tooltip: 'Xóa ảnh',

@@ -398,7 +398,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
         backgroundColor: Theme.of(context).appBarTheme.backgroundColor,
         elevation: 0,
         title: const Text(
-          'Friends',
+          'Bạn bè',
           style: TextStyle(fontWeight: FontWeight.w700),
         ),
       ),

@@ -54,7 +54,7 @@ void main() {
     final semanticsText = tester
         .getSemantics(find.byType(NavigationBar))
         .toStringDeep();
-    expect(semanticsText, contains('Notifications, 3 unread'));
+    expect(semanticsText, contains('Thông báo, 3 chưa đọc'));
     semanticsHandle.dispose();
   });
 

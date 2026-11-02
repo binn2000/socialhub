@@ -1,10 +1,12 @@
 import 'package:flutter_learning/models/comment.dart';
 import 'package:flutter_learning/models/friend_request.dart';
 import 'package:flutter_learning/models/message.dart';
+import 'package:flutter_learning/models/music_track.dart';
 import 'package:flutter_learning/models/notification.dart';
 import 'package:flutter_learning/models/post.dart';
 import 'package:flutter_learning/models/story.dart';
 import 'package:flutter_learning/models/user.dart';
+import 'package:flutter_learning/models/user_note.dart';
 import 'package:flutter_learning/models/user_profile.dart';
 
 /// An error answered by the API (`{message, code, errors?}`), or a network
@@ -222,6 +224,27 @@ abstract class SocialApi {
 
   /// Deletes one of the current user's own stories.
   Future<void> deleteStory(String storyId);
+
+  /// Changes who can see one of my stories. [privacy] is the API value
+  /// (`public`, `friends`, `only_me`).
+  Future<void> updateStoryPrivacy(String storyId, String privacy);
+
+  /// The stories of one person that the current user may open (from their
+  /// profile).
+  Future<List<Story>> loadUserStories(String userId);
+
+  /// The current user's note and their friends' notes, mine first.
+  Future<List<UserNote>> loadNotes();
+
+  /// Shares [text] (and optionally a song) as the current user's note,
+  /// replacing the old one. The text may be empty when there is a song.
+  /// [privacy] is the API value; null keeps the old note's (friends if new).
+  Future<UserNote> setNote(String text, {MusicTrack? track, String? privacy});
+
+  /// Songs matching [query] from Apple Music, each with a 30-second preview.
+  Future<List<MusicTrack>> searchMusic(String query);
+
+  Future<void> deleteNote();
   Future<ChatMessage> sendMessage(
     String conversationId,
     ChatMessage draft, {

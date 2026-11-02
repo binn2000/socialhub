@@ -704,6 +704,154 @@ paths:
         '429': {$ref: '#/components/responses/TooManyRequests'}
         '500': {$ref: '#/components/responses/ServerError'}
 
+  /me/note:
+    put:
+      tags: [Notes]
+      operationId: setNote
+      summary: Share a note (a short text on your avatar for 24 hours)
+      description: |
+        **Authentication:** required. Creates the caller's note or **replaces** the one they have (a person has at most
+        one). `text` is 1-60 characters after trimming (emoji count as one each). The note disappears 24 hours after
+        it was last set. Setting a note again restarts the 24 hours. Limited to 30 per hour.
+
+        **Privacy:** `privacy` is `public`, `friends` (the default for a new note) or `only_me`, like a post. Friends see
+        `friends` and `public` notes in their Notes row; people who follow the caller see `public` ones there too;
+        anyone can see a `public` note on the caller's profile (`UserProfile.note`). Leaving `privacy` out keeps the
+        note's current value when it is replaced.
+
+        **Music:** `trackId` (an id from `GET /music/search`) attaches a song. The server looks the song up again in the
+        catalogue, so only real catalogue songs and previews can be attached (`422` on `trackId` otherwise). With a
+        song the text may be empty. If Spotify is configured on the server, the song's Spotify link is stored too.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SetNoteRequest'}
+            example: {text: Đang học bài 📚}
+      responses:
+        '200':
+          description: The caller's note.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/NoteEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+    delete:
+      tags: [Notes]
+      operationId: deleteNote
+      summary: Remove my note
+      description: '**Authentication:** required. Idempotent.'
+      responses:
+        '204': {description: The caller has no note.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /music/search:
+    get:
+      tags: [Music]
+      operationId: searchMusic
+      summary: Find a song to attach to a note or a story
+      description: |
+        **Authentication:** required. Searches the Apple Music / iTunes catalogue (the Vietnamese storefront by
+        default, so Vietnamese songs are found) and returns up to 20 songs, each with a **30-second preview**
+        (`previewUrl`) and a link to the song on Apple Music. Previews are for listening only: always show the
+        Apple Music link next to the player. Results are cached for an hour. Limited to 30 per minute.
+        If the catalogue cannot be reached the answer is `503` with `code: music_unavailable`.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: {type: string, minLength: 2, maxLength: 100}
+      responses:
+        '200':
+          description: The songs found (possibly none).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TrackList'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '503': {description: The music catalogue is unavailable., content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /users/{user}/stories:
+    get:
+      tags: [Stories]
+      operationId: listUserStories
+      summary: The active stories of one person
+      description: |
+        **Authentication:** required. The unexpired stories of `{user}` that the caller may see: their own, `friends`
+        and `public` stories of friends, and `public` stories of anyone else. A user who blocked the caller is `404`.
+        Newest first, at most 30. Use it to open the stories of someone from their profile.
+      parameters:
+        - {$ref: '#/components/parameters/UserId'}
+      responses:
+        '200':
+          description: The stories.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/StoryList'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /stories/{story}:
+    patch:
+      tags: [Stories]
+      operationId: updateStoryPrivacy
+      summary: Change who can see a story
+      description: '**Authentication:** required. The author only (`403` for someone else who can see it, `404` if the caller cannot see it). Effective at once.'
+      parameters:
+        - name: story
+          in: path
+          required: true
+          schema: {$ref: '#/components/schemas/Id'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [privacy]
+              properties:
+                privacy: {$ref: '#/components/schemas/Privacy'}
+      responses:
+        '200':
+          description: The updated story.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/StoryEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
+  /notes:
+    get:
+      tags: [Notes]
+      operationId: listNotes
+      summary: Notes of me and my friends
+      description: |
+        **Authentication:** required. The caller's own note (first) and the notes of their accepted friends that have
+        not expired, newest first, that the caller may see (`friends` and `public` notes of friends, `public` notes of
+        people the caller follows). Strangers, blocked people and deleted accounts never appear. At most 100 notes;
+        there is no paging. Shown as a row on the Messages screen.
+      responses:
+        '200':
+          description: The notes.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/NoteList'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
+
   /me/presence:
     post:
       tags: [Me]
@@ -2102,8 +2250,14 @@ components:
       allOf:
         - $ref: '#/components/schemas/UserSummary'
         - type: object
-          required: [bio, coverUrl, about, createdAt, friendsCount, followersCount, followingCount, isFollowing, followsYou, isOnline, lastSeenAt, mutualFriendsCount, friendship, isBlocked]
+          required: [bio, coverUrl, about, createdAt, note, hasStories, friendsCount, followersCount, followingCount, isFollowing, followsYou, isOnline, lastSeenAt, mutualFriendsCount, friendship, isBlocked]
           properties:
+            note:
+              anyOf:
+                - $ref: '#/components/schemas/Note'
+                - type: 'null'
+              description: The active note of the profile owner, if the caller may see it (`public`, or `friends` for a friend; the owner always sees their own).
+            hasStories: {type: boolean, x-computed: 'the user has an unexpired story the caller may see (open them with GET /users/{user}/stories)'}
             followersCount: {type: integer, minimum: 0}
             followingCount: {type: integer, minimum: 0}
             isFollowing: {type: boolean, x-computed: the caller follows this user}
@@ -2216,6 +2370,41 @@ components:
         education: {type: [string, 'null'], maxLength: 100}
         website: {type: [string, 'null'], maxLength: 200, description: 'An http:// or https:// address.'}
         birthday: {type: [string, 'null'], format: date, description: 'YYYY-MM-DD, after 1900-01-01 and before today.'}
+    Note:
+      type: object
+      required: [user, text, track, privacy, createdAt, expiresAt]
+      properties:
+        user: {$ref: '#/components/schemas/UserSummary'}
+        privacy: {$ref: '#/components/schemas/Privacy'}
+        text: {type: string, maxLength: 60, description: 'Empty when the note is only a song.'}
+        track:
+          anyOf:
+            - $ref: '#/components/schemas/Track'
+            - type: 'null'
+        createdAt: {$ref: '#/components/schemas/Timestamp'}
+        expiresAt: {$ref: '#/components/schemas/Timestamp'}
+    NoteEnvelope: {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/Note'}}}
+    NoteList: {type: object, required: [data], properties: {data: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/Note'}}}}
+    StoryList: {type: object, required: [data], properties: {data: {type: array, maxItems: 30, items: {$ref: '#/components/schemas/Story'}}}}
+    SetNoteRequest:
+      type: object
+      properties:
+        text: {type: string, maxLength: 60, description: 'Required (1-60) unless `trackId` is given.'}
+        trackId: {type: string, maxLength: 20}
+        privacy: {$ref: '#/components/schemas/Privacy'}
+    Track:
+      type: object
+      description: A song with a 30-second preview, from Apple Music.
+      required: [id, title, artist, artworkUrl, previewUrl, appleMusicUrl, spotifyUrl]
+      properties:
+        id: {type: string, description: 'The Apple Music / iTunes track id.'}
+        title: {type: string}
+        artist: {type: string}
+        artworkUrl: {type: [string, 'null'], format: uri}
+        previewUrl: {type: string, format: uri, description: '30-second preview (https, hosted by Apple).'}
+        appleMusicUrl: {type: [string, 'null'], format: uri}
+        spotifyUrl: {type: [string, 'null'], format: uri, description: 'The same song on Spotify; only on notes and stories, and only when Spotify is configured on the server.'}
+    TrackList: {type: object, required: [data], properties: {data: {type: array, maxItems: 20, items: {$ref: '#/components/schemas/Track'}}}}
     IsOnline:
       type: boolean
       description: |
@@ -2394,7 +2583,7 @@ components:
       x-backend-entity: stories
       x-not-exposed:
         - "gradientColors (replaced by `background`; Flutter maps it to colors)"
-      required: [id, author, text, imageUrl, background, createdAt, expiresAt, isViewed]
+      required: [id, author, text, imageUrl, background, createdAt, expiresAt, isViewed, privacy, track]
       properties:
         id: {$ref: '#/components/schemas/Id'}
         author: {$ref: '#/components/schemas/UserSummary'}
@@ -2404,17 +2593,27 @@ components:
         createdAt: {$ref: '#/components/schemas/Timestamp'}
         expiresAt: {$ref: '#/components/schemas/Timestamp'}
         isViewed: {type: boolean, x-computed: the caller has viewed this story (always false for the caller's own)}
+        privacy: {$ref: '#/components/schemas/Privacy'}
+        track:
+          anyOf:
+            - $ref: '#/components/schemas/Track'
+            - type: 'null'
+          description: The song attached to the story, with its 30-second preview.
     CreateStoryRequest:
       type: object
       properties:
         text: {type: string, maxLength: 500}
         background: {$ref: '#/components/schemas/StoryBackground'}
         image: {type: string, format: binary, description: 'image/jpeg, image/png or image/webp, max 10 MB.'}
+        trackId: {type: string, maxLength: 20, description: 'A song from `GET /music/search`; checked against the catalogue, like on a note.'}
+        privacy: {$ref: '#/components/schemas/Privacy'}
     CreateStoryJsonRequest:
       type: object
       properties:
         text: {type: string, maxLength: 500}
         background: {$ref: '#/components/schemas/StoryBackground'}
+        trackId: {type: string, maxLength: 20}
+        privacy: {$ref: '#/components/schemas/Privacy'}
 
     # ------------------------------------------------------------ conversations
     Message:
@@ -2624,6 +2823,7 @@ components:
           properties:
             commentsCount: {type: integer, minimum: 0, description: The post's comment count after this comment.}
     StoryEnvelope: {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/Story'}}}
+    StoryList: {type: object, required: [data], properties: {data: {type: array, maxItems: 30, items: {$ref: '#/components/schemas/Story'}}}}
     StoryPage:
       type: object
       required: [data, meta]
@@ -3038,6 +3238,38 @@ x-database:
       unique: ["(follower_id, followee_id)"]
       indexes:
         - {columns: [followee_id]}
+
+    notes:
+      apiEntities: []
+      note: "A person's note: a short text shown to friends for 24 hours (PUT /me/note)."
+      columns:
+        - {name: id, type: "bigint unsigned", nullable: false, key: primary, note: auto-increment}
+        - {name: user_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: text, type: "varchar(60)", nullable: false}
+        - {name: expires_at, type: timestamp, nullable: false}
+        - {name: privacy, type: "varchar(10)", nullable: false, note: "public | friends | only_me; default friends"}
+        - {name: created_at, type: timestamp, nullable: true}
+        - {name: updated_at, type: timestamp, nullable: true}
+      unique: ["(user_id)"]
+      indexes:
+        - {columns: [expires_at], note: "purge"}
+      notes:
+        - "The 60-character limit must also be enforced by Laravel validation (CHECK is not enforced on MariaDB 10.1)."
+
+    track_columns:
+      apiEntities: []
+      note: "Columns added to `notes` and `stories` for an attached song (a snapshot of the catalogue entry)."
+      columns:
+        - {name: track_id, type: "varchar(20)", nullable: true}
+        - {name: track_title, type: "varchar(200)", nullable: true}
+        - {name: track_artist, type: "varchar(200)", nullable: true}
+        - {name: track_artwork_url, type: "varchar(500)", nullable: true}
+        - {name: track_preview_url, type: "varchar(500)", nullable: true, note: "https, apple.com or mzstatic.com hosts only"}
+        - {name: track_apple_url, type: "varchar(500)", nullable: true}
+        - {name: track_spotify_url, type: "varchar(500)", nullable: true}
+      notes:
+        - "notes.text becomes nullable: a note can be only a song."
+        - "`stories.privacy` and `notes.privacy` (varchar(10), default friends) were added with the privacy choice; the allowed values must also be enforced by Laravel validation."
 
     user_blocks:
       apiEntities: []

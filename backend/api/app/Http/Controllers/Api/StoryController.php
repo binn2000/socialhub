@@ -4,8 +4,12 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Story;
+use App\Models\User;
+use App\Support\Blocks;
 use App\Support\Cursor;
 use App\Support\ImageStore;
+use App\Support\MusicCatalog;
+use App\Support\MusicUnavailable;
 use App\Support\PostPresenter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -25,7 +29,7 @@ class StoryController extends Controller
         $me = $request->user();
         $limit = (int) $request->query('limit', 30);
         $scope = 'stories';
-        $query = Story::visibleTo($me);
+        $query = Story::inTrayOf($me);
 
         if ($request->filled('cursor')) {
             // The cursor holds "<bucket>|<createdAt>": m = my stories (listed first), o = everyone else's.
@@ -72,11 +76,26 @@ class StoryController extends Controller
             'text' => ['nullable', 'string', 'max:500'],
             'image' => ImageStore::rules(),
             'background' => ['nullable', Rule::in(['indigo', 'sunset', 'mint', 'berry'])],
+            'trackId' => ['nullable', 'string', 'max:20'],
+            'privacy' => ['nullable', Rule::in(['public', 'friends', 'only_me'])],
         ]);
 
         $text = trim((string) ($data['text'] ?? ''));
         if ($text === '' && ! $request->hasFile('image')) {
             throw ValidationException::withMessages(['text' => [__('A story needs text or an image.')]]);
+        }
+
+        $track = null;
+        if (filled($data['trackId'] ?? null)) {
+            try {
+                $track = MusicCatalog::lookup($data['trackId']);
+            } catch (MusicUnavailable) {
+                abort(response()->json(['message' => __('Music is not available right now.'), 'code' => 'music_unavailable'], 503));
+            }
+            if ($track === null) {
+                throw ValidationException::withMessages(['trackId' => [__('This song was not found.')]]);
+            }
+            $track = MusicCatalog::withSpotify($track);
         }
 
         $imagePath = $request->hasFile('image') ? ImageStore::store($request->file('image'), 'stories') : null;
@@ -87,14 +106,45 @@ class StoryController extends Controller
                 'text' => $text === '' ? null : $text,
                 'image_path' => $imagePath,
                 'background' => $data['background'] ?? 'indigo',
+                'privacy' => $data['privacy'] ?? 'friends',
                 'expires_at' => now()->addHours(24),
-            ]);
+            ] + MusicCatalog::columns($track));
         } catch (\Throwable $e) {
             ImageStore::delete($imagePath);
             throw $e;
         }
 
         return response()->json(['data' => $this->present($story->refresh()->setRelation('author', $request->user()), false)], 201);
+    }
+
+    /** The unexpired stories of one person that the caller may see (their profile opens them). */
+    public function forUser(Request $request, User $user): array
+    {
+        $me = $request->user();
+        if (Blocks::blockedBy($user->id, $me->id)) {
+            abort(404);
+        }
+
+        $stories = Story::visibleTo($me)->where('user_id', $user->id)->with('author')
+            ->orderByDesc('created_at')->orderByDesc('id')->limit(30)->get();
+        $viewed = DB::table('story_views')->where('user_id', $me->id)->whereIn('story_id', $stories->pluck('id'))
+            ->pluck('story_id')->flip();
+
+        return ['data' => $stories->map(fn (Story $s) => $this->present($s, $me->id !== $s->user_id && $viewed->has($s->id)))->all()];
+    }
+
+    public function update(Request $request, Story $story): array
+    {
+        $this->authorizeView($request, $story);
+
+        if ($story->user_id !== $request->user()->id) {
+            abort(response()->json(['message' => __('This action is unauthorized.'), 'code' => 'forbidden'], 403));
+        }
+
+        $data = $request->validate(['privacy' => ['required', Rule::in(['public', 'friends', 'only_me'])]]);
+        $story->update(['privacy' => $data['privacy']]);
+
+        return ['data' => $this->present($story->refresh()->setRelation('author', $request->user()), false)];
     }
 
     public function destroy(Request $request, Story $story): JsonResponse
@@ -141,6 +191,8 @@ class StoryController extends Controller
             'createdAt' => PostPresenter::timestamp($s->created_at),
             'expiresAt' => PostPresenter::timestamp($s->expires_at),
             'isViewed' => $isViewed,
+            'track' => MusicCatalog::present($s),
+            'privacy' => $s->privacy,
         ];
     }
 }

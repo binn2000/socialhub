@@ -1,9 +1,11 @@
 import 'package:flutter_learning/data/mock_data.dart';
 import 'package:flutter_learning/models/comment.dart';
 import 'package:flutter_learning/models/message.dart';
+import 'package:flutter_learning/models/music_track.dart';
 import 'package:flutter_learning/models/post.dart';
 import 'package:flutter_learning/models/story.dart';
 import 'package:flutter_learning/models/user.dart';
+import 'package:flutter_learning/models/user_note.dart';
 import 'package:flutter_learning/models/user_profile.dart';
 import 'package:flutter_learning/services/social_api.dart';
 
@@ -97,6 +99,29 @@ class MockSocialApi extends SocialApi {
 
   @override
   Future<void> deleteStory(String storyId) async {}
+
+  @override
+  Future<void> updateStoryPrivacy(String storyId, String privacy) async {}
+
+  @override
+  Future<List<Story>> loadUserStories(String userId) async => const [];
+
+  // Notes need a server; the mock app does not show them.
+  @override
+  Future<List<UserNote>> loadNotes() async => const [];
+
+  @override
+  Future<UserNote> setNote(
+    String text, {
+    MusicTrack? track,
+    String? privacy,
+  }) async => UserNote(user: currentUser, text: text, track: track);
+
+  @override
+  Future<List<MusicTrack>> searchMusic(String query) async => const [];
+
+  @override
+  Future<void> deleteNote() async {}
 
   @override
   Future<NotificationPage> loadMoreNotifications(String cursor) async =>

@@ -3,7 +3,9 @@ import 'package:flutter_learning/models/comment.dart';
 import 'package:flutter_learning/models/friend_request.dart';
 import 'package:flutter_learning/models/message.dart';
 import 'package:flutter_learning/models/notification.dart';
+import 'package:flutter_learning/models/music_track.dart';
 import 'package:flutter_learning/models/post.dart';
+import 'package:flutter_learning/models/user_note.dart';
 import 'package:flutter_learning/models/story.dart';
 import 'package:flutter_learning/models/user.dart';
 import 'package:flutter_learning/models/user_profile.dart';
@@ -153,6 +155,27 @@ Post postFromJson(Json json, {String Function(String)? absoluteUrl}) {
   );
 }
 
+MusicTrack? trackFromJson(Json? json) => json == null
+    ? null
+    : MusicTrack(
+        id: json['id'] as String,
+        title: json['title'] as String,
+        artist: json['artist'] as String,
+        artworkUrl: json['artworkUrl'] as String?,
+        previewUrl: json['previewUrl'] as String,
+        appleMusicUrl: json['appleMusicUrl'] as String?,
+        spotifyUrl: json['spotifyUrl'] as String?,
+      );
+
+UserNote noteFromJson(Json json, {String Function(String)? absoluteUrl}) =>
+    UserNote(
+      user: userFromJson(json['user'] as Json, absoluteUrl: absoluteUrl),
+      text: json['text'] as String,
+      time: timeAgo(json['createdAt'] as String),
+      track: trackFromJson(json['track'] as Json?),
+      privacy: privacyLabel(json['privacy'] as String?),
+    );
+
 Story storyFromJson(Json json, {String Function(String)? absoluteUrl}) {
   final imageUrl = json['imageUrl'] as String?;
   return Story(
@@ -164,6 +187,9 @@ Story storyFromJson(Json json, {String Function(String)? absoluteUrl}) {
     text: json['text'] as String?,
     isViewed: json['isViewed'] as bool,
     gradientColors: storyGradient(json['background'] as String?),
+    time: timeAgo(json['createdAt'] as String),
+    track: trackFromJson(json['track'] as Json?),
+    privacy: privacyLabel(json['privacy'] as String?),
   );
 }
 

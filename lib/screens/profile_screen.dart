@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_learning/models/post.dart';
 import 'package:flutter_learning/models/user.dart';
+import 'package:flutter_learning/models/user_note.dart';
+import 'package:flutter_learning/services/audio_preview.dart';
+import 'package:flutter_learning/widgets/notes_row.dart';
 import 'package:flutter_learning/services/social_api.dart';
 import 'package:flutter_learning/theme/app_tokens.dart';
 import 'package:flutter_learning/widgets/mock_image.dart';
@@ -54,6 +58,15 @@ class ProfileScreen extends StatefulWidget {
   /// Picks and uploads a new cover image (own profile, server only).
   final VoidCallback? onChangeCover;
 
+  /// The person's active note (shown under the bio when the viewer may see
+  /// it) and the player for its song.
+  final UserNote? note;
+  final AudioPreview audio;
+
+  /// Whether there are stories to open, and how to open them.
+  final bool hasStories;
+  final VoidCallback? onOpenStories;
+
   /// Opens followers and following list sheets.
   final VoidCallback? onOpenFollowers;
   final VoidCallback? onOpenFollowing;
@@ -74,6 +87,10 @@ class ProfileScreen extends StatefulWidget {
     this.onChangeCover,
     this.onOpenFollowers,
     this.onOpenFollowing,
+    this.note,
+    this.audio = const NoAudioPreview(),
+    this.hasStories = false,
+    this.onOpenStories,
   });
 
   @override
@@ -101,6 +118,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _friendList = null;
       _photosCursor = _friendsCursor = null;
     }
+  }
+
+  Future<void> _copyLink(String link) async {
+    await Clipboard.setData(ClipboardData(text: link));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('Đã sao chép liên kết')));
   }
 
   void _selectSection(ProfileSection section) {
@@ -281,6 +306,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                           ),
                                         ),
                                       ],
+                                      if (widget.note != null) ...[
+                                        const SizedBox(height: AppSpacing.sm),
+                                        _ProfileNote(
+                                          note: widget.note!,
+                                          audio: widget.audio,
+                                        ),
+                                      ],
+                                      if (widget.hasStories &&
+                                          widget.onOpenStories != null) ...[
+                                        const SizedBox(height: AppSpacing.sm),
+                                        OutlinedButton.icon(
+                                          onPressed: widget.onOpenStories,
+                                          icon: const Icon(
+                                            Icons.auto_stories_outlined,
+                                            size: 18,
+                                          ),
+                                          label: const Text('Xem tin'),
+                                        ),
+                                      ],
                                       const SizedBox(height: AppSpacing.md),
                                       Container(
                                         padding: const EdgeInsets.symmetric(
@@ -416,7 +460,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                       Expanded(
                                         child: FilledButton(
                                           onPressed: widget.onEditProfile,
-                                          child: const Text('Edit Profile'),
+                                          child: const Text('Chỉnh sửa hồ sơ'),
                                         ),
                                       ),
                                       if (widget.onOpenSaved != null) ...[
@@ -634,7 +678,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ),
                     ])
                       if (value.isNotEmpty)
-                        _AboutRow(icon: icon, label: label, value: value),
+                        _AboutRow(
+                          icon: icon,
+                          label: label,
+                          value: value,
+                          // Opening a link needs a package the project does
+                          // not use yet, so tapping copies it.
+                          onTap: label == 'Website'
+                              ? () => _copyLink(value)
+                              : null,
+                        ),
                     _AboutRow(
                       icon: Icons.verified_user_outlined,
                       label: 'Trạng thái email',
@@ -875,6 +928,58 @@ class _ProfileScreenState extends State<ProfileScreen> {
 }
 
 /// Calm cover banner at the top of the profile card.
+/// A note on a profile: its text, with a song player when it has a song.
+class _ProfileNote extends StatelessWidget {
+  final UserNote note;
+  final AudioPreview audio;
+
+  const _ProfileNote({required this.note, required this.audio});
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+    final track = note.track;
+    final text = noteBubbleText(note);
+    return Semantics(
+      button: track != null,
+      label: 'Ghi chú: $text',
+      excludeSemantics: true,
+      child: InkWell(
+        onTap: track == null
+            ? null
+            : () => showNoteDetail(context, note, audio: audio),
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.md,
+            vertical: AppSpacing.sm,
+          ),
+          decoration: BoxDecoration(
+            color: palette.brandSoft,
+            borderRadius: BorderRadius.circular(AppRadius.md),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                track == null
+                    ? Icons.sticky_note_2_outlined
+                    : Icons.music_note_rounded,
+                size: 16,
+                color: palette.brand,
+              ),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(text, maxLines: 2, overflow: TextOverflow.ellipsis),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ProfilePhotoTile extends StatelessWidget {
   final String url;
 
@@ -984,18 +1089,20 @@ class _AboutRow extends StatelessWidget {
   final IconData icon;
   final String label;
   final String value;
+  final VoidCallback? onTap;
 
   const _AboutRow({
     required this.icon,
     required this.label,
     required this.value,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
     final textTheme = Theme.of(context).textTheme;
-    return Padding(
+    final row = Padding(
       padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1013,6 +1120,17 @@ class _AboutRow extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+    if (onTap == null) return row;
+    return Semantics(
+      button: true,
+      label: '$label: $value, bấm để sao chép',
+      excludeSemantics: true,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        child: row,
       ),
     );
   }

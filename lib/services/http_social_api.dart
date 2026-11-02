@@ -3,9 +3,11 @@ import 'dart:math';
 import 'package:dio/dio.dart';
 import 'package:flutter_learning/models/comment.dart';
 import 'package:flutter_learning/models/message.dart';
+import 'package:flutter_learning/models/music_track.dart';
 import 'package:flutter_learning/models/post.dart';
 import 'package:flutter_learning/models/story.dart';
 import 'package:flutter_learning/models/user.dart';
+import 'package:flutter_learning/models/user_note.dart';
 import 'package:flutter_learning/models/user_profile.dart';
 import 'package:flutter_learning/services/api_mappers.dart';
 import 'package:flutter_learning/services/social_api.dart';
@@ -39,6 +41,8 @@ class HttpSocialApi extends SocialApi {
 
   @override
   bool get isRemote => true;
+
+  static const _uploadTimeout = Duration(seconds: 120);
 
   /// The server writes absolute URLs from its APP_URL (usually `localhost`),
   /// which a phone or emulator cannot reach; point them at the API host.
@@ -74,7 +78,15 @@ class HttpSocialApi extends SocialApi {
         path,
         data: data,
         queryParameters: query,
-        options: Options(method: method, headers: headers),
+        options: Options(
+          method: method,
+          headers: headers,
+          // Photos are sent in full and then re-encoded by the server, which
+          // takes longer than a normal request; give uploads time so a slow
+          // phone does not report a failure for a post that was created.
+          sendTimeout: data is FormData ? _uploadTimeout : null,
+          receiveTimeout: data is FormData ? _uploadTimeout : null,
+        ),
       );
       final body = response.data;
       return body is Json ? body : <String, dynamic>{};
@@ -507,6 +519,8 @@ class HttpSocialApi extends SocialApi {
           data: await _body({
             'text': draft.text,
             'background': storyBackgroundFor(draft.gradientColors),
+            'trackId': draft.track?.id,
+            'privacy': privacyValue(draft.privacy),
           }, _localPhoto(draft.imageUrl)),
         ))['data']
         as Json,
@@ -660,6 +674,10 @@ class HttpSocialApi extends SocialApi {
       friendship: friendshipFromJson(friendship['status'] as String?),
       requestId: friendship['requestId'] as String?,
       isBlocked: profile['isBlocked'] == true,
+      note: profile['note'] == null
+          ? null
+          : noteFromJson(profile['note'] as Json, absoluteUrl: _absoluteUrl),
+      hasStories: profile['hasStories'] == true,
       isFollowing: (profile['isFollowing'] as bool?) ?? false,
       followsYou: (profile['followsYou'] as bool?) ?? false,
       followersCount: (profile['followersCount'] as int?) ?? 0,
@@ -968,4 +986,49 @@ class HttpSocialApi extends SocialApi {
   Future<void> deleteStory(String storyId) async {
     await _request('DELETE', '/stories/$storyId');
   }
+
+  @override
+  Future<List<UserNote>> loadNotes() async => [
+    for (final note in _list(await _request('GET', '/notes')))
+      noteFromJson(note, absoluteUrl: _absoluteUrl),
+  ];
+
+  @override
+  Future<UserNote> setNote(
+    String text, {
+    MusicTrack? track,
+    String? privacy,
+  }) async => noteFromJson(
+    (await _request(
+          'PUT',
+          '/me/note',
+          data: {'text': text, 'trackId': ?track?.id, 'privacy': ?privacy},
+        ))['data']
+        as Json,
+    absoluteUrl: _absoluteUrl,
+  );
+
+  @override
+  Future<List<MusicTrack>> searchMusic(String query) async => [
+    for (final track in _list(
+      await _request('GET', '/music/search', query: {'q': query.trim()}),
+    ))
+      trackFromJson(track)!,
+  ];
+
+  @override
+  Future<void> deleteNote() async {
+    await _request('DELETE', '/me/note');
+  }
+
+  @override
+  Future<void> updateStoryPrivacy(String storyId, String privacy) async {
+    await _request('PATCH', '/stories/$storyId', data: {'privacy': privacy});
+  }
+
+  @override
+  Future<List<Story>> loadUserStories(String userId) async => [
+    for (final story in _list(await _request('GET', '/users/$userId/stories')))
+      storyFromJson(story, absoluteUrl: _absoluteUrl),
+  ];
 }

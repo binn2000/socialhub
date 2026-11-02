@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_learning/models/user.dart';
 import 'package:flutter_learning/models/user_profile.dart';
 import 'package:flutter_learning/screens/profile_screen.dart';
+import 'package:flutter_learning/services/audio_preview.dart';
 import 'package:flutter_learning/services/social_api.dart';
 import 'package:flutter_learning/theme/app_tokens.dart';
 import 'package:flutter_learning/widgets/follow_list_sheet.dart';
@@ -34,6 +35,10 @@ class UserProfileScreen extends StatefulWidget {
   final Future<UserPage> Function(String userId, String? cursor)? onLoadFriends;
   final ValueChanged<UserModel>? onOpenProfile;
 
+  /// Opens the person's stories, and plays the song of their note.
+  final ValueChanged<UserModel>? onOpenStories;
+  final AudioPreview audio;
+
   /// Follow/unfollow and follow lists.
   final Future<void> Function(String userId)? onFollow;
   final Future<void> Function(String userId)? onUnfollow;
@@ -47,6 +52,8 @@ class UserProfileScreen extends StatefulWidget {
     this.onLoadPhotos,
     this.onLoadFriends,
     this.onOpenProfile,
+    this.onOpenStories,
+    this.audio = const NoAudioPreview(),
     this.onFollow,
     this.onUnfollow,
     this.onLoadFollowers,
@@ -373,6 +380,12 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
               ),
               action: _actionFor(profile),
               onOpenProfile: widget.onOpenProfile,
+              note: profile.note,
+              audio: widget.audio,
+              hasStories: profile.hasStories,
+              onOpenStories: widget.onOpenStories == null
+                  ? null
+                  : () => widget.onOpenStories!(profile.user),
               onOpenFollowers: widget.onLoadFollowers == null
                   ? null
                   : () => showFollowListSheet(

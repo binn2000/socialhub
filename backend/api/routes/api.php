@@ -2,20 +2,22 @@
 
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BlockController;
-use App\Http\Controllers\Api\ReportController;
-use App\Http\Controllers\Api\DeviceController;
 use App\Http\Controllers\Api\CommentController;
 use App\Http\Controllers\Api\ConversationController;
+use App\Http\Controllers\Api\DeviceController;
 use App\Http\Controllers\Api\ExploreController;
 use App\Http\Controllers\Api\FollowController;
 use App\Http\Controllers\Api\FriendController;
-use App\Http\Middleware\TouchLastSeen;
 use App\Http\Controllers\Api\MeController;
+use App\Http\Controllers\Api\MusicController;
+use App\Http\Controllers\Api\NoteController;
 use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\PostController;
 use App\Http\Controllers\Api\PostInteractionController;
+use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\StoryController;
 use App\Http\Controllers\Api\UserController;
+use App\Http\Middleware\TouchLastSeen;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function () {
@@ -35,6 +37,10 @@ Route::prefix('v1')->group(function () {
         Route::delete('me/devices', [DeviceController::class, 'destroy']);
         Route::post('me/avatar', [MeController::class, 'setAvatar']);
         Route::delete('me/avatar', [MeController::class, 'removeAvatar']);
+        Route::put('me/note', [NoteController::class, 'store'])->middleware('throttle:notes');
+        Route::delete('me/note', [NoteController::class, 'destroy']);
+        Route::get('notes', [NoteController::class, 'index']);
+        Route::get('music/search', [MusicController::class, 'search'])->middleware('throttle:music');
         Route::post('me/presence', [MeController::class, 'presence']);
         Route::post('me/cover', [MeController::class, 'setCover']);
         Route::delete('me/cover', [MeController::class, 'removeCover']);
@@ -83,7 +89,9 @@ Route::prefix('v1')->group(function () {
 
         Route::get('stories', [StoryController::class, 'index']);
         Route::post('stories', [StoryController::class, 'store'])->middleware(['throttle:stories', 'idempotent']);
+        Route::patch('stories/{story}', [StoryController::class, 'update']);
         Route::delete('stories/{story}', [StoryController::class, 'destroy']);
+        Route::get('users/{user}/stories', [StoryController::class, 'forUser']);
         Route::post('stories/{story}/view', [StoryController::class, 'view']);
 
         Route::get('feed', [PostController::class, 'feed']);

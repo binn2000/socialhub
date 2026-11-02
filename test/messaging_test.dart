@@ -8,7 +8,7 @@ import 'package:flutter_learning/screens/chat_screen.dart';
 Future<void> _openMessages(WidgetTester tester) async {
   await tester.tap(find.byIcon(Icons.message_rounded).first);
   await tester.pumpAndSettle();
-  expect(find.text('Messages'), findsOneWidget);
+  expect(find.text('Tin nhắn'), findsOneWidget);
 }
 
 Future<void> _openConversation(

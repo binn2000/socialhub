@@ -6,6 +6,7 @@ import 'package:flutter_learning/models/server_tab.dart';
 import 'package:flutter_learning/models/story.dart';
 import 'package:flutter_learning/models/user.dart';
 import 'package:flutter_learning/screens/story_viewer_screen.dart';
+import 'package:flutter_learning/services/audio_preview.dart';
 import 'package:flutter_learning/utils/post_search.dart';
 import 'package:flutter_learning/widgets/comments_sheet.dart';
 import 'package:flutter_learning/widgets/mock_image.dart';
@@ -60,6 +61,12 @@ class HomeScreen extends StatefulWidget {
   /// Deletes one of my stories from the story viewer. Null on the mock app.
   final ValueChanged<Story>? onDeleteStory;
 
+  /// Changes who can see one of my stories. Null on the mock app.
+  final void Function(Story story, String privacy)? onChangeStoryPrivacy;
+
+  /// Plays the song of a story in the story viewer.
+  final AudioPreview audio;
+
   const HomeScreen({
     super.key,
     required this.currentUser,
@@ -84,6 +91,8 @@ class HomeScreen extends StatefulWidget {
     this.serverTabs,
     this.onLoadTab,
     this.onDeleteStory,
+    this.onChangeStoryPrivacy,
+    this.audio = const NoAudioPreview(),
   });
 
   @override
@@ -103,6 +112,8 @@ class _HomeScreenState extends State<HomeScreen> {
               onViewed: widget.onStoryViewed,
               currentUserId: widget.currentUser.id,
               onDelete: widget.onDeleteStory,
+              onChangePrivacy: widget.onChangeStoryPrivacy,
+              audio: widget.audio,
             ),
         transitionsBuilder:
             (routeContext, animation, secondaryAnimation, child) {

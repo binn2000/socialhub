@@ -484,8 +484,9 @@ void main() {
 
     final data = adapter.last('POST /stories').data as FormData;
     expect(data.files.map((f) => f.key), ['image']);
-    expect(data.fields.map((f) => f.key), ['background']);
-    expect(data.fields.single.value, 'berry');
+    expect(data.fields.map((f) => f.key), ['background', 'privacy']);
+    expect(data.fields.first.value, 'berry');
+    expect(data.fields.last.value, 'friends');
     expect(story.imageUrl, 'http://10.0.2.2:8000/storage/stories/s.png');
   });
 
@@ -817,6 +818,134 @@ void main() {
     expect(typing.otherTyping, isTrue);
     expect(typing.messages, isEmpty);
     expect(quiet.otherTyping, isFalse); // an old server says nothing
+  });
+
+  test('notes: list, share and remove', () async {
+    final note = {
+      'user': _summary('u2', 'Lan Hương'),
+      'text': 'Đang học bài',
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+      'expiresAt': DateTime.now().toUtc().toIso8601String(),
+    };
+    adapter.routes['GET /notes'] = (
+      200,
+      {
+        'data': [note],
+      },
+    );
+    adapter.routes['PUT /me/note'] = (200, {'data': note});
+    adapter.routes['DELETE /me/note'] = (204, null);
+    await tokens.write('t');
+
+    final notes = await api.loadNotes();
+    final saved = await api.setNote('Đang học bài');
+    await api.deleteNote();
+
+    expect(notes.single.text, 'Đang học bài');
+    expect(notes.single.user.name, 'Lan Hương');
+    expect(notes.single.time, 'Vừa xong');
+    expect(saved.text, 'Đang học bài');
+    expect(adapter.last('PUT /me/note').data, {'text': 'Đang học bài'});
+    expect(
+      adapter.requests.any((r) => r.method == 'DELETE' && r.path == '/me/note'),
+      isTrue,
+    );
+  });
+
+  test('music: search, and a song is sent by its id only', () async {
+    final track = {
+      'id': '111',
+      'title': 'Em Của Ngày Hôm Qua',
+      'artist': 'Sơn Tùng M-TP',
+      'artworkUrl': 'https://is1-ssl.mzstatic.com/a.jpg',
+      'previewUrl': 'https://audio-ssl.itunes.apple.com/preview/111.m4a',
+      'appleMusicUrl': 'https://music.apple.com/vn/album/x/1?i=111',
+      'spotifyUrl': null,
+    };
+    adapter.routes['GET /music/search'] = (
+      200,
+      {
+        'data': [track],
+      },
+    );
+    adapter.routes['PUT /me/note'] = (
+      200,
+      {
+        'data': {
+          'user': _summary('me', 'Minh Ánh'),
+          'text': '',
+          'track': track,
+          'createdAt': DateTime.now().toUtc().toIso8601String(),
+          'expiresAt': DateTime.now().toUtc().toIso8601String(),
+        },
+      },
+    );
+    adapter.routes['POST /stories'] = (
+      201,
+      {
+        'data': {
+          'id': 's1',
+          'author': _summary('me', 'Minh Ánh'),
+          'text': 'Hè về',
+          'imageUrl': null,
+          'background': 'mint',
+          'createdAt': DateTime.now().toUtc().toIso8601String(),
+          'expiresAt': DateTime.now().toUtc().toIso8601String(),
+          'isViewed': false,
+          'track': track,
+        },
+      },
+    );
+    await tokens.write('t');
+
+    final found = await api.searchMusic('  em của ngày ');
+    final note = await api.setNote('', track: found.single);
+    final story = await api.createStory(
+      Story(
+        id: 'draft',
+        user: (await _signedInUser(api, adapter, tokens)) as UserModel,
+        text: 'Hè về',
+        isViewed: false,
+        gradientColors: const [Color(0xFF00B894), Color(0xFF26C6DA)],
+        track: found.single,
+      ),
+    );
+
+    expect(adapter.last('GET /music/search').queryParameters, {
+      'q': 'em của ngày',
+    });
+    expect(
+      found.single.previewUrl,
+      'https://audio-ssl.itunes.apple.com/preview/111.m4a',
+    );
+    expect(found.single.spotifyUrl, isNull);
+    expect(adapter.last('PUT /me/note').data, {'text': '', 'trackId': '111'});
+    expect(note.track?.title, 'Em Của Ngày Hôm Qua');
+    expect(note.text, '');
+    expect((adapter.last('POST /stories').data as Map)['trackId'], '111');
+    expect(story.track?.id, '111');
+
+    // without a song no trackId is sent
+    await api.setNote('chỉ chữ');
+    expect(adapter.last('PUT /me/note').data, {'text': 'chỉ chữ'});
+  });
+
+  test('uploads wait longer than normal requests', () async {
+    final file = File('${Directory.systemTemp.path}/timeout_test.jpg')
+      ..writeAsBytesSync([1, 2, 3]);
+    addTearDown(file.deleteSync);
+    adapter.routes['POST /me/cover'] = (200, {'data': _me()});
+    adapter.routes['GET /me'] = (200, {'data': _me()});
+    await tokens.write('t');
+
+    await api.uploadCover(file.path);
+    await api.restoreSession();
+
+    final upload = adapter.last('POST /me/cover');
+    final normal = adapter.last('GET /me');
+    expect(upload.sendTimeout, const Duration(seconds: 120));
+    expect(upload.receiveTimeout, const Duration(seconds: 120));
+    expect(normal.receiveTimeout, isNot(const Duration(seconds: 120)));
   });
 
   test('a feed tab is asked for by name and cursor', () async {

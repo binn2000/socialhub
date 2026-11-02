@@ -2,6 +2,7 @@
 
 namespace App\Support;
 
+use App\Models\Story;
 use App\Models\User;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -104,6 +105,8 @@ class UserPresenter
             'about' => self::about($user),
             'createdAt' => PostPresenter::timestamp($user->created_at),
             'friendsCount' => count($sets[$user->id] ?? []),
+            'note' => ($note = NotePresenter::visibleOn($viewer, $user)) ? NotePresenter::one($note) : null,
+            'hasStories' => Story::visibleTo($viewer)->where('user_id', $user->id)->exists(),
             'followersCount' => self::followersCount($user->id),
             'followingCount' => self::followingCount($user->id),
             'isFollowing' => ! $isSelf && Blocks::followedBy($viewer->id, $user->id),

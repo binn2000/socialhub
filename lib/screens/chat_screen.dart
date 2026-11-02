@@ -1,9 +1,11 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_learning/models/message.dart';
 import 'package:flutter_learning/models/user.dart';
 import 'package:flutter_learning/theme/app_tokens.dart';
+import 'package:flutter_learning/widgets/image_viewer.dart';
 import 'package:flutter_learning/widgets/user_avatar.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -442,6 +444,14 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  Future<void> _copyFileLink(ChatAttachment attachment) async {
+    await Clipboard.setData(ClipboardData(text: attachment.url));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('Đã sao chép liên kết tệp')));
+  }
+
   Widget _buildAttachments(List<ChatAttachment> attachments, bool isMine) {
     return Column(
       crossAxisAlignment: isMine
@@ -452,65 +462,87 @@ class _ChatScreenState extends State<ChatScreen> {
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 4),
             child: att.isImage
-                ? ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: att.url.startsWith('http')
-                        ? Image.network(
-                            att.url,
-                            width: 200,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) =>
-                                const Icon(Icons.broken_image),
-                          )
-                        : Image.file(
-                            File(att.url),
-                            width: 200,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) =>
-                                const Icon(Icons.broken_image),
-                          ),
-                  )
-                : Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: isMine
-                          ? Colors.white.withValues(alpha: 0.15)
-                          : Theme.of(context).cardColor,
-                      borderRadius: BorderRadius.circular(8),
+                ? GestureDetector(
+                    onTap: () => showImageViewer(context, att.url),
+                    child: Semantics(
+                      button: true,
+                      label: 'Xem ảnh ${att.name}',
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: att.url.startsWith('http')
+                            ? Image.network(
+                                att.url,
+                                width: 200,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, _, _) =>
+                                    const Icon(Icons.broken_image),
+                              )
+                            : Image.file(
+                                File(att.url),
+                                width: 200,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, _, _) =>
+                                    const Icon(Icons.broken_image),
+                              ),
+                      ),
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.insert_drive_file_outlined, size: 24),
-                        const SizedBox(width: 8),
-                        Flexible(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                att.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 13,
-                                ),
-                              ),
-                              Text(
-                                att.formattedSize,
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: isMine
-                                      ? Colors.white70
-                                      : Theme.of(
-                                          context,
-                                        ).colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                            ],
-                          ),
+                  )
+                : Semantics(
+                    button: att.url.startsWith('http'),
+                    label: 'Tệp ${att.name}, ${att.formattedSize}',
+                    child: InkWell(
+                      // Opening a file needs a package the project does not
+                      // use yet, so tapping copies its link instead.
+                      onTap: att.url.startsWith('http')
+                          ? () => _copyFileLink(att)
+                          : null,
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: isMine
+                              ? Colors.white.withValues(alpha: 0.15)
+                              : Theme.of(context).cardColor,
+                          borderRadius: BorderRadius.circular(8),
                         ),
-                      ],
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.insert_drive_file_outlined,
+                              size: 24,
+                            ),
+                            const SizedBox(width: 8),
+                            Flexible(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    att.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                  Text(
+                                    att.formattedSize,
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: isMine
+                                          ? Colors.white70
+                                          : Theme.of(
+                                              context,
+                                            ).colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
           ),

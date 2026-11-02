@@ -11,7 +11,7 @@ final _bioField = find.widgetWithText(TextFormField, 'Tiểu sử');
 
 Future<void> _openEditProfile(WidgetTester tester) async {
   await tapTab(tester, profileTab);
-  await tester.tap(find.text('Edit Profile'));
+  await tester.tap(find.text('Chỉnh sửa hồ sơ'));
   await tester.pumpAndSettle();
   expect(find.byType(EditProfileScreen), findsOneWidget);
 }
@@ -124,7 +124,7 @@ void main() {
     expect(find.text(newBio), findsOneWidget);
 
     // Opening Edit Profile again starts from the saved values.
-    await tester.tap(find.text('Edit Profile'));
+    await tester.tap(find.text('Chỉnh sửa hồ sơ'));
     await tester.pumpAndSettle();
     expect(tester.widget<TextFormField>(_nameField).controller!.text, newName);
   });

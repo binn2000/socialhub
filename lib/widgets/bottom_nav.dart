@@ -40,12 +40,12 @@ class SocialBottomNav extends StatelessWidget {
     Icons.person_rounded,
   ];
   static const labels = [
-    'Home',
-    'Explore',
-    'Friends',
-    'Create Post',
-    'Notifications',
-    'Profile',
+    'Trang chủ',
+    'Khám phá',
+    'Bạn bè',
+    'Tạo bài viết',
+    'Thông báo',
+    'Cá nhân',
   ];
 
   Widget _buildIcon(AppPalette palette, AppTab tab, {required bool selected}) {
@@ -72,7 +72,7 @@ class SocialBottomNav extends StatelessWidget {
 
   NavigationDestination _buildDestination(AppPalette palette, AppTab tab) {
     final label = tab == AppTab.notifications && unreadNotificationCount > 0
-        ? '${labels[tab.index]}, $unreadNotificationCount unread'
+        ? '${labels[tab.index]}, $unreadNotificationCount chưa đọc'
         : labels[tab.index];
     return NavigationDestination(
       key: navDestinationKey(tab),

@@ -44,6 +44,22 @@ void main() {
     );
   });
 
+  test('a story keeps when it was posted', () {
+    final story = storyFromJson({
+      'id': 's1',
+      'author': _author(),
+      'text': 'Xin chào',
+      'imageUrl': null,
+      'background': 'mint',
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+      'expiresAt': DateTime.now().toUtc().toIso8601String(),
+      'isViewed': false,
+    });
+
+    expect(story.time, 'Vừa xong');
+    expect(story.copyWith(isViewed: true).time, 'Vừa xong');
+  });
+
   test('cover and About come from the profile json', () {
     final user = userFromJson({
       ..._author(),

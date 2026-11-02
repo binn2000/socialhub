@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,15 +9,20 @@ import 'package:flutter_learning/main.dart';
 import 'package:flutter_learning/models/comment.dart';
 import 'package:flutter_learning/models/friend_request.dart';
 import 'package:flutter_learning/models/message.dart';
+import 'package:flutter_learning/models/music_track.dart';
 import 'package:flutter_learning/models/notification.dart';
 import 'package:flutter_learning/models/post.dart';
 import 'package:flutter_learning/models/story.dart';
 import 'package:flutter_learning/models/user.dart';
+import 'package:flutter_learning/models/user_note.dart';
 import 'package:flutter_learning/models/user_profile.dart';
+import 'package:flutter_learning/services/audio_preview.dart';
 import 'package:flutter_learning/services/push_service.dart';
 import 'package:flutter_learning/services/social_api.dart';
+import 'package:flutter_learning/screens/story_viewer_screen.dart';
 import 'package:flutter_learning/widgets/comments_sheet.dart';
 import 'package:flutter_learning/widgets/story_item.dart';
+import 'package:flutter_learning/widgets/track_picker.dart' show musicCredit;
 import 'package:flutter_learning/widgets/user_avatar.dart';
 
 import 'test_helpers.dart';
@@ -556,6 +562,76 @@ class _FakeRemoteApi extends SocialApi {
     return conversationSearchResults[query] ?? const [];
   }
 
+  /// What a music search returns, and what was searched.
+  var tracks = <MusicTrack>[];
+  ApiException? musicError;
+  final musicQueries = <String>[];
+
+  @override
+  Future<List<MusicTrack>> searchMusic(String query) async {
+    musicQueries.add(query);
+    if (musicError != null) throw musicError!;
+    return tracks;
+  }
+
+  /// What the server holds as notes (mine and my friends').
+  var serverNotes = <UserNote>[];
+  ApiException? noteError;
+  final noteCalls = <String>[];
+  final notePrivacies = <String?>[];
+
+  @override
+  Future<List<UserNote>> loadNotes() async {
+    noteCalls.add('load');
+    return List.of(serverNotes);
+  }
+
+  @override
+  Future<UserNote> setNote(
+    String text, {
+    MusicTrack? track,
+    String? privacy,
+  }) async {
+    noteCalls.add('set:$text${track == null ? '' : '|${track.id}'}');
+    notePrivacies.add(privacy);
+    if (noteError != null) throw noteError!;
+    final note = UserNote(
+      user: _me,
+      text: text,
+      time: 'Vừa xong',
+      track: track,
+      privacy:
+          {'public': 'Công khai', 'only_me': 'Chỉ mình tôi'}[privacy] ??
+          'Bạn bè',
+    );
+    serverNotes = [note, ...serverNotes.where((n) => n.user.id != _me.id)];
+    return note;
+  }
+
+  @override
+  Future<void> deleteNote() async {
+    noteCalls.add('delete');
+    if (noteError != null) throw noteError!;
+    serverNotes = serverNotes.where((n) => n.user.id != _me.id).toList();
+  }
+
+  final storyPrivacyChanges = <String>[];
+  ApiException? storyPrivacyError;
+  final userStories = <String, List<Story>>{};
+  final userStoryCalls = <String>[];
+
+  @override
+  Future<void> updateStoryPrivacy(String storyId, String privacy) async {
+    if (storyPrivacyError != null) throw storyPrivacyError!;
+    storyPrivacyChanges.add('$storyId:$privacy');
+  }
+
+  @override
+  Future<List<Story>> loadUserStories(String userId) async {
+    userStoryCalls.add(userId);
+    return userStories[userId] ?? const [];
+  }
+
   final deletedStories = <String>[];
   ApiException? storyDeleteError;
 
@@ -670,16 +746,60 @@ Future<void> _pump(
   _FakeRemoteApi api, {
   Future<String?> Function()? pickPhoto,
   PushService? push,
+  AudioPreview? audio,
 }) async {
   await tester.pumpWidget(
     SocialHubApp(
       api: api,
       pickPhoto: pickPhoto ?? () async => null,
       push: push,
+      audio: audio,
     ),
   );
   await tester.pumpAndSettle();
 }
+
+/// A player that only remembers what it was asked to play.
+class _FakeAudio implements AudioPreview {
+  final played = <String>[];
+  final loops = <bool>[];
+  var stops = 0;
+  final _playing = ValueNotifier<String?>(null);
+
+  @override
+  ValueListenable<String?> get playing => _playing;
+
+  /// Makes the next plays fail, like a missing plugin or a bad clip.
+  var failing = false;
+
+  @override
+  Future<bool> play(String url, {bool loop = false}) async {
+    played.add(url);
+    loops.add(loop);
+    if (failing) return false;
+    _playing.value = url;
+    return true;
+  }
+
+  @override
+  Future<void> stop() async {
+    stops++;
+    _playing.value = null;
+  }
+
+  @override
+  void dispose() {}
+}
+
+MusicTrack _track(String id, String title, {String artist = 'Sơn Tùng M-TP'}) =>
+    MusicTrack(
+      id: id,
+      title: title,
+      artist: artist,
+      previewUrl: 'https://audio-ssl.itunes.apple.com/preview/$id.m4a',
+      appleMusicUrl: 'https://music.apple.com/vn/album/x/1?i=$id',
+      spotifyUrl: 'https://open.spotify.com/track/$id',
+    );
 
 UserModel _stranger(String id, String name) => UserModel(
   id: id,
@@ -1028,7 +1148,7 @@ void main() {
       expect(api.acceptedRequests, ['r1']);
       expect(find.text('Lời mời kết bạn (1)'), findsNothing);
       // Duy Khang is now in the list with "Bạn bè", like Lan.
-      expect(find.text('Bạn bè'), findsNWidgets(2));
+      expect(find.widgetWithText(OutlinedButton, 'Bạn bè'), findsNWidgets(2));
     });
 
     testWidgets('accepting reloads, because the two now follow each other', (
@@ -1215,7 +1335,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(api.sharedPosts, ['p1:message']);
-      expect(find.text('Messages'), findsOneWidget);
+      expect(find.text('Tin nhắn'), findsOneWidget);
     });
   });
 
@@ -1247,7 +1367,7 @@ void main() {
 
       expect(api.profilesLoaded, ['lan']);
       expect(find.text('Bài của Lan Hương'), findsOneWidget);
-      expect(find.text('Edit Profile'), findsNothing);
+      expect(find.text('Chỉnh sửa hồ sơ'), findsNothing);
       expect(find.widgetWithText(OutlinedButton, 'Bạn bè'), findsOneWidget);
     });
 
@@ -1371,7 +1491,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(api.profilesLoaded, isEmpty);
-      expect(find.text('Edit Profile'), findsOneWidget);
+      expect(find.text('Chỉnh sửa hồ sơ'), findsOneWidget);
     });
   });
 
@@ -1602,7 +1722,7 @@ void main() {
       await tester.tap(find.textContaining('đã gửi lời mời kết bạn'));
       await tester.pumpAndSettle();
 
-      expect(find.widgetWithText(AppBar, 'Friends'), findsOneWidget);
+      expect(find.widgetWithText(AppBar, 'Bạn bè'), findsOneWidget);
     });
   });
 
@@ -2071,7 +2191,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(api.sharedPosts, ['p2:message']);
-      expect(find.text('Messages'), findsOneWidget);
+      expect(find.text('Tin nhắn'), findsOneWidget);
     });
 
     testWidgets('saving shows on the tile, in the details and unsaves again', (
@@ -2499,7 +2619,7 @@ void main() {
 
     Future<void> openDeleteDialog(WidgetTester tester) async {
       await openProfile(tester);
-      await tester.tap(find.text('Edit Profile'));
+      await tester.tap(find.text('Chỉnh sửa hồ sơ'));
       await tester.pumpAndSettle();
       await tester.scrollUntilVisible(
         find.text('Xóa tài khoản'),
@@ -2569,7 +2689,7 @@ void main() {
   testWidgets('the mock app has no delete-account button', (tester) async {
     await pumpSocialHub(tester);
     await tapTab(tester, profileTab);
-    await tester.tap(find.text('Edit Profile'));
+    await tester.tap(find.text('Chỉnh sửa hồ sơ'));
     await tester.pumpAndSettle();
 
     expect(find.text('Xóa tài khoản'), findsNothing);
@@ -3245,7 +3365,7 @@ void main() {
     group('the blocked list', () {
       Future<void> openBlockedList(WidgetTester tester) async {
         await tapTab(tester, profileTab);
-        await tester.tap(find.text('Edit Profile'));
+        await tester.tap(find.text('Chỉnh sửa hồ sơ'));
         await tester.pumpAndSettle();
         await tester.scrollUntilVisible(
           find.text('Người đã chặn'),
@@ -3362,7 +3482,7 @@ void main() {
         expect(find.textContaining('Chặn '), findsNothing);
         await tester.tap(find.text('Đổi quyền riêng tư'));
         await tester.pumpAndSettle();
-        await tester.tap(find.text('Bạn bè'));
+        await tester.tap(find.widgetWithText(ListTile, 'Bạn bè'));
         await tester.pumpAndSettle();
 
         expect(api.privacyChanges, ['m1:friends']);
@@ -3627,7 +3747,7 @@ void main() {
     group('Edit profile', () {
       Future<void> openEdit(WidgetTester tester) async {
         await openProfile(tester);
-        await tester.tap(find.text('Edit Profile'));
+        await tester.tap(find.text('Chỉnh sửa hồ sơ'));
         await tester.pumpAndSettle();
       }
 
@@ -3698,7 +3818,7 @@ void main() {
       testWidgets('the mock app has no About fields', (tester) async {
         await pumpSocialHub(tester);
         await tapTab(tester, profileTab);
-        await tester.tap(find.text('Edit Profile'));
+        await tester.tap(find.text('Chỉnh sửa hồ sơ'));
         await tester.pumpAndSettle();
 
         expect(find.text('Nơi sống'), findsNothing);
@@ -4298,6 +4418,760 @@ void main() {
       await tester.pump();
 
       expect(find.byTooltip('Xóa tin'), findsNothing);
+    });
+  });
+
+  group('small fixes', () {
+    setUp(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'Clipboard.setData') {
+              _clipboard = (call.arguments as Map)['text'] as String?;
+            }
+            return null;
+          });
+    });
+
+    tearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null);
+      _clipboard = null;
+    });
+
+    ChatMessage withFiles() => ChatMessage(
+      id: 'm1',
+      senderId: _lan.id,
+      text: 'Tệp cho bạn',
+      time: 'Vừa xong',
+      attachments: const [
+        ChatAttachment(
+          id: 'a1',
+          type: 'image',
+          url: 'https://cdn.example/chat/a.jpg',
+          name: 'anh.jpg',
+          mimeType: 'image/jpeg',
+          sizeBytes: 2048,
+        ),
+        ChatAttachment(
+          id: 'a2',
+          type: 'file',
+          url: 'https://cdn.example/chat/b.pdf',
+          name: 'hop-dong.pdf',
+          mimeType: 'application/pdf',
+          sizeBytes: 123456,
+        ),
+      ],
+    );
+
+    Future<void> openChatWithFiles(WidgetTester tester) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..conversations = [
+          Conversation(
+            id: 'c1',
+            user: _lan,
+            lastMessage: 'Tệp cho bạn',
+            time: '1 giờ trước',
+            unreadCount: 0,
+            messages: const [],
+          ),
+        ];
+      api.chatHistory['c1'] = [withFiles()];
+      await _pump(tester, api);
+      await openMessagesFromHome(tester);
+      await tester.tap(find.text('Lan Hương'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('a picture in the chat opens full screen and closes', (
+      tester,
+    ) async {
+      await openChatWithFiles(tester);
+
+      await tester.tap(find.bySemanticsLabel('Xem ảnh anh.jpg'));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Đóng ảnh'), findsOneWidget);
+      expect(find.byType(InteractiveViewer), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Đóng ảnh'));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Đóng ảnh'), findsNothing);
+    });
+
+    testWidgets('tapping a file copies its link', (tester) async {
+      await openChatWithFiles(tester);
+
+      await tester.tap(find.text('hop-dong.pdf'));
+      await tester.pumpAndSettle();
+
+      expect(_clipboard, 'https://cdn.example/chat/b.pdf');
+      expect(find.text('Đã sao chép liên kết tệp'), findsOneWidget);
+    });
+
+    testWidgets('the website in Giới thiệu copies its link', (tester) async {
+      tester.view.physicalSize = const Size(800, 2400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final api = _FakeRemoteApi(
+        sessionUser: _me.copyWith(
+          about: const UserAbout(website: 'https://example.com/me'),
+        ),
+      );
+      await _pump(tester, api);
+      await tapTab(tester, profileTab);
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Giới thiệu'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('https://example.com/me'));
+      await tester.pumpAndSettle();
+
+      expect(_clipboard, 'https://example.com/me');
+      expect(find.text('Đã sao chép liên kết'), findsOneWidget);
+    });
+
+    testWidgets("a story shows when it was posted and has no dead heart", (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..stories = [
+          Story(
+            id: 's1',
+            user: _lan,
+            text: 'Tin s1',
+            isViewed: false,
+            gradientColors: const [Color(0xFF5D6BFF), Color(0xFF9B8CFF)],
+            time: '5 phút trước',
+          ),
+        ];
+      await _pump(tester, api);
+
+      await tester.tap(find.byType(StoryItem).at(1));
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump();
+
+      expect(find.text('5 phút trước'), findsOneWidget);
+      expect(find.text('Just now'), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byType(StoryViewerScreen),
+          matching: find.byIcon(Icons.favorite_border_rounded),
+        ),
+        findsNothing,
+      );
+    });
+
+    testWidgets('the navigation speaks Vietnamese', (tester) async {
+      await _pump(tester, _FakeRemoteApi(sessionUser: _me));
+      final bar = tester.widget<NavigationBar>(find.byType(NavigationBar));
+
+      final labels = [
+        for (final destination in bar.destinations)
+          (destination as NavigationDestination).label,
+      ];
+      expect(labels, [
+        'Trang chủ',
+        'Khám phá',
+        'Bạn bè',
+        'Tạo bài viết',
+        'Thông báo',
+        'Cá nhân',
+      ]);
+    });
+  });
+
+  group('dark mode', () {
+    testWidgets('every tab and the pushed screens lay out without errors', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..extraPosts.add(_mine('m1', 'Bài của tôi'))
+        ..stories = [_story('s1', _lan)]
+        ..notifications = [
+          _notification(id: 'n1', type: 'like', actor: _lan, postId: 'p1'),
+        ]
+        ..conversations = [
+          Conversation(
+            id: 'c1',
+            user: _lan,
+            lastMessage: 'tin cũ',
+            time: '1 giờ trước',
+            unreadCount: 1,
+            messages: const [],
+          ),
+        ];
+      api.chatHistory['c1'] = [
+        ChatMessage(
+          id: 'm1',
+          senderId: _lan.id,
+          text: 'tin cũ',
+          time: 'Vừa xong',
+          attachments: const [
+            ChatAttachment(
+              id: 'a2',
+              type: 'file',
+              url: 'https://cdn.example/b.pdf',
+              name: 'hop-dong.pdf',
+              mimeType: 'application/pdf',
+              sizeBytes: 123456,
+            ),
+          ],
+        ),
+      ];
+      await _pump(tester, api);
+      await tester.tap(find.byTooltip('Chế độ tối'));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Chế độ sáng'), findsOneWidget); // dark now
+
+      for (final tab in [
+        exploreTab,
+        friendsTab,
+        notificationsTab,
+        profileTab,
+      ]) {
+        await tapTab(tester, tab);
+      }
+      await tapTab(tester, profileTab);
+      await tester.tap(find.text('Chỉnh sửa hồ sơ'));
+      await tester.pumpAndSettle();
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+
+      await tapTab(tester, homeTab);
+      await openMessagesFromHome(tester);
+      await tester.tap(find.text('Lan Hương'));
+      await tester.pumpAndSettle();
+      expect(find.text('hop-dong.pdf'), findsOneWidget);
+
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('notes', () {
+    UserNote lanNote([String text = 'Đang đi cà phê ☕']) =>
+        UserNote(user: _lan, text: text, time: '1 giờ trước');
+
+    Future<_FakeRemoteApi> openMessages(
+      WidgetTester tester, {
+      List<UserNote> notes = const [],
+    }) async {
+      final api = _FakeRemoteApi(sessionUser: _me)..serverNotes = notes;
+      await _pump(tester, api);
+      await openMessagesFromHome(tester);
+      return api;
+    }
+
+    testWidgets('the row offers a note and shows my friends\' notes', (
+      tester,
+    ) async {
+      await openMessages(tester, notes: [lanNote()]);
+
+      expect(find.text('Ghi chú của bạn'), findsOneWidget);
+      expect(find.text('Đang đi cà phê ☕'), findsOneWidget);
+      expect(find.text('Lan Hương'), findsWidgets);
+    });
+
+    testWidgets('sharing a note shows it on my item', (tester) async {
+      final api = await openMessages(tester);
+
+      await tester.tap(find.bySemanticsLabel('Chia sẻ ghi chú của bạn'));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Chia sẻ'))
+            .onPressed,
+        isNull, // nothing typed yet
+      );
+      await tester.enterText(find.byType(TextField).last, '  Đang học bài 📚 ');
+      await tester.pump();
+      await tester.tap(find.widgetWithText(FilledButton, 'Chia sẻ'));
+      await tester.pumpAndSettle();
+
+      expect(api.noteCalls, contains('set:Đang học bài 📚'));
+      expect(find.text('Đang học bài 📚'), findsOneWidget);
+      expect(
+        find.text('Bạn bè sẽ thấy ghi chú này trong 24 giờ.'),
+        findsNothing,
+      ); // closed
+    });
+
+    testWidgets('the text is limited to 60 characters', (tester) async {
+      await openMessages(tester);
+      await tester.tap(find.bySemanticsLabel('Chia sẻ ghi chú của bạn'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextField).last, 'a' * 80);
+      await tester.pump();
+
+      final field = tester.widget<TextField>(find.byType(TextField).last);
+      expect(field.controller!.text.length, 60);
+    });
+
+    testWidgets('my note can be changed and removed', (tester) async {
+      final api = await openMessages(
+        tester,
+        notes: [UserNote(user: _me, text: 'Ghi chú cũ', time: 'Vừa xong')],
+      );
+      expect(find.text('Ghi chú cũ'), findsOneWidget);
+
+      await tester.tap(find.text('Ghi chú cũ'));
+      await tester.pumpAndSettle();
+      expect(
+        find.widgetWithText(TextField, 'Ghi chú cũ'),
+        findsOneWidget,
+      ); // prefilled
+      await tester.enterText(find.byType(TextField).last, 'Ghi chú mới');
+      await tester.pump();
+      await tester.tap(find.widgetWithText(FilledButton, 'Cập nhật'));
+      await tester.pumpAndSettle();
+      expect(find.text('Ghi chú mới'), findsOneWidget);
+      expect(find.text('Ghi chú cũ'), findsNothing);
+
+      await tester.tap(find.text('Ghi chú mới'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Xóa ghi chú'));
+      await tester.pumpAndSettle();
+
+      expect(api.noteCalls, containsAllInOrder(['set:Ghi chú mới', 'delete']));
+      expect(find.text('Ghi chú mới'), findsNothing);
+      expect(find.bySemanticsLabel('Chia sẻ ghi chú của bạn'), findsOneWidget);
+    });
+
+    testWidgets('a refusal stays in the sheet with the reason', (tester) async {
+      final api = await openMessages(tester);
+      api.noteError = const ApiException(
+        statusCode: 429,
+        code: 'too_many_requests',
+        message: 'Bạn thao tác quá nhanh, hãy thử lại sau.',
+      );
+      await tester.tap(find.bySemanticsLabel('Chia sẻ ghi chú của bạn'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).last, 'Xin chào');
+      await tester.pump();
+      await tester.pump();
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Chia sẻ'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Bạn thao tác quá nhanh, hãy thử lại sau.'),
+        findsOneWidget,
+      );
+      expect(
+        find.widgetWithText(FilledButton, 'Chia sẻ'),
+        findsOneWidget,
+      ); // still open
+    });
+
+    testWidgets('tapping a friend\'s note opens a chat with them', (
+      tester,
+    ) async {
+      final api = await openMessages(tester, notes: [lanNote()]);
+
+      await tester.tap(find.text('Đang đi cà phê ☕'));
+      await tester.pumpAndSettle();
+
+      expect(api.startedWith, ['lan']);
+      expect(find.text('Nhắn tin...'), findsOneWidget);
+    });
+
+    testWidgets('the notes are loaded with the app and again with Messages', (
+      tester,
+    ) async {
+      final api = await openMessages(tester);
+
+      expect(api.noteCalls.where((c) => c == 'load').length, 2);
+    });
+
+    testWidgets('the mock app has no notes row', (tester) async {
+      await pumpSocialHub(tester);
+      await openMessagesFromHome(tester);
+
+      expect(find.text('Ghi chú của bạn'), findsNothing);
+    });
+  });
+
+  group('music in notes and stories', () {
+    late _FakeAudio audio;
+
+    setUp(() {
+      audio = _FakeAudio();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'Clipboard.setData') {
+              _clipboard = (call.arguments as Map)['text'] as String?;
+            }
+            return null;
+          });
+    });
+
+    tearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null);
+      _clipboard = null;
+    });
+
+    Future<_FakeRemoteApi> openNoteSheet(
+      WidgetTester tester, {
+      List<UserNote> notes = const [],
+    }) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..serverNotes = notes
+        ..tracks = [
+          _track('1', 'Em Của Ngày Hôm Qua'),
+          _track('2', 'Chạy Ngay Đi'),
+        ];
+      await _pump(tester, api, audio: audio);
+      await openMessagesFromHome(tester);
+      await tester.tap(find.bySemanticsLabel('Chia sẻ ghi chú của bạn'));
+      await tester.pumpAndSettle();
+      return api;
+    }
+
+    Future<void> search(WidgetTester tester, String text) async {
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Tìm bài hát hoặc nghệ sĩ'),
+        text,
+      );
+      await tester.pump(const Duration(milliseconds: 450));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('a song is searched, previewed and attached to a note', (
+      tester,
+    ) async {
+      final api = await openNoteSheet(tester);
+
+      await tester.tap(find.text('Thêm nhạc'));
+      await tester.pumpAndSettle();
+      expect(find.text(musicCredit), findsOneWidget);
+      await search(tester, 'em của ngày');
+      expect(api.musicQueries, ['em của ngày']);
+      expect(find.text('Em Của Ngày Hôm Qua'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Nghe thử Em Của Ngày Hôm Qua'));
+      await tester.pump();
+      expect(audio.played, [
+        'https://audio-ssl.itunes.apple.com/preview/1.m4a',
+      ]);
+      expect(find.byTooltip('Dừng nghe thử'), findsOneWidget);
+
+      await tester.tap(find.text('Em Của Ngày Hôm Qua'));
+      await tester.pumpAndSettle();
+      expect(audio.stops, greaterThan(0)); // choosing stops the preview
+      expect(find.byTooltip('Bỏ nhạc'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Chia sẻ'));
+      await tester.pumpAndSettle();
+      expect(api.noteCalls, contains('set:|1'));
+      expect(find.text('Em Của Ngày Hôm Qua'), findsOneWidget); // on my item
+    });
+
+    testWidgets('a note can be only a song, and the song can be removed', (
+      tester,
+    ) async {
+      await openNoteSheet(tester);
+      expect(
+        tester
+            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Chia sẻ'))
+            .onPressed,
+        isNull,
+      );
+
+      await tester.tap(find.text('Thêm nhạc'));
+      await tester.pumpAndSettle();
+      await search(tester, 'em');
+      await tester.tap(find.text('Chạy Ngay Đi'));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Chia sẻ'))
+            .onPressed,
+        isNotNull, // a song is enough
+      );
+
+      await tester.tap(find.byTooltip('Bỏ nhạc'));
+      await tester.pump();
+      expect(find.text('Thêm nhạc'), findsOneWidget);
+      expect(
+        tester
+            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Chia sẻ'))
+            .onPressed,
+        isNull,
+      );
+    });
+
+    testWidgets('the picker explains short queries, empty results and errors', (
+      tester,
+    ) async {
+      final api = await openNoteSheet(tester);
+      await tester.tap(find.text('Thêm nhạc'));
+      await tester.pumpAndSettle();
+      expect(find.text('Gõ tên bài hát để tìm.'), findsOneWidget);
+
+      await search(tester, 'a');
+      expect(api.musicQueries, isEmpty); // too short to ask
+
+      api.tracks = [];
+      await search(tester, 'zzzz');
+      expect(find.text('Không tìm thấy bài hát'), findsOneWidget);
+
+      api.musicError = const ApiException(
+        statusCode: 503,
+        code: 'music_unavailable',
+        message: 'Hiện chưa dùng được nhạc, hãy thử lại sau.',
+      );
+      await search(tester, 'yyyy');
+      expect(
+        find.text('Hiện chưa dùng được nhạc, hãy thử lại sau.'),
+        findsOneWidget,
+      );
+
+      api
+        ..musicError = null
+        ..tracks = [_track('3', 'Bài mới')];
+      await tester.tap(find.text('Thử lại'));
+      await tester.pumpAndSettle();
+      expect(find.text('Bài mới'), findsOneWidget);
+    });
+
+    testWidgets("a friend's note with a song opens a player", (tester) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..serverNotes = [
+          UserNote(
+            user: _lan,
+            text: 'Đang nghe',
+            time: '1 giờ trước',
+            track: _track('1', 'Em Của Ngày Hôm Qua'),
+          ),
+        ];
+      await _pump(tester, api, audio: audio);
+      await openMessagesFromHome(tester);
+
+      await tester.tap(find.text('Đang nghe'));
+      await tester.pumpAndSettle();
+      expect(find.text('Em Của Ngày Hôm Qua'), findsOneWidget);
+      expect(find.text(musicCredit), findsOneWidget);
+
+      // The preview starts by itself when the note is opened.
+      expect(audio.played, [
+        'https://audio-ssl.itunes.apple.com/preview/1.m4a',
+      ]);
+
+      await tester.tap(find.text('Sao chép liên kết Spotify'));
+      await tester.pump();
+      expect(_clipboard, 'https://open.spotify.com/track/1');
+      await tester.tap(find.text('Sao chép liên kết Apple Music'));
+      await tester.pump();
+      expect(_clipboard, 'https://music.apple.com/vn/album/x/1?i=1');
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Nhắn tin'));
+      await tester.pumpAndSettle();
+      expect(audio.stops, greaterThan(0)); // the sheet closed
+      expect(api.startedWith, ['lan']);
+    });
+
+    testWidgets('a song-only note shows the title on the bubble', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..serverNotes = [
+          UserNote(
+            user: _lan,
+            text: '',
+            time: '1 giờ trước',
+            track: _track('1', 'Em Của Ngày Hôm Qua'),
+          ),
+        ];
+      await _pump(tester, api, audio: audio);
+      await openMessagesFromHome(tester);
+
+      expect(find.text('Em Của Ngày Hôm Qua'), findsOneWidget);
+      expect(find.byIcon(Icons.music_note_rounded), findsOneWidget);
+    });
+
+    testWidgets('a note is shared with the chosen audience', (tester) async {
+      final api = await openNoteSheet(tester);
+      expect(find.text('Bạn bè'), findsWidgets); // default
+
+      await tester.tap(find.text('Ai xem được ghi chú'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Công khai'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).last, 'Xin chào');
+      await tester.pump();
+      await tester.tap(find.widgetWithText(FilledButton, 'Chia sẻ'));
+      await tester.pumpAndSettle();
+
+      expect(api.notePrivacies, ['public']);
+    });
+
+    testWidgets('a story is created for the chosen audience', (tester) async {
+      final api = _FakeRemoteApi(sessionUser: _me);
+      await _pump(tester, api, audio: audio);
+
+      await tester.tap(find.byType(StoryItem).first);
+      await tester.pumpAndSettle();
+      expect(find.text('Ai xem được: Bạn bè'), findsOneWidget);
+      await tester.tap(find.text('Ai xem được: Bạn bè'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Công khai'));
+      await tester.pumpAndSettle();
+      expect(find.text('Ai xem được: Công khai'), findsOneWidget);
+
+      await tester.enterText(find.byType(TextField).last, 'Hè về');
+      await tester.tap(find.widgetWithText(FilledButton, 'Chia sẻ'));
+      await tester.pumpAndSettle();
+
+      expect(api.createdStories.single.privacy, 'Công khai');
+    });
+
+    testWidgets('a story is created with its song', (tester) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..tracks = [_track('2', 'Chạy Ngay Đi')];
+      await _pump(tester, api, audio: audio);
+
+      await tester.tap(find.byType(StoryItem).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Thêm nhạc'));
+      await tester.pumpAndSettle();
+      await search(tester, 'chạy');
+      await tester.tap(find.text('Chạy Ngay Đi'));
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('Chạy Ngay Đi · Sơn Tùng M-TP'),
+        findsOneWidget,
+      );
+      expect(find.byTooltip('Đổi nhạc'), findsOneWidget);
+
+      await tester.enterText(find.byType(TextField).last, 'Hè về');
+      await tester.tap(find.widgetWithText(FilledButton, 'Chia sẻ'));
+      await tester.pumpAndSettle();
+
+      expect(api.createdStories.single.track?.id, '2');
+    });
+
+    testWidgets('a story plays its song in a loop, can be muted, and stops', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..stories = [
+          Story(
+            id: 's1',
+            user: _lan,
+            text: 'Tin s1',
+            isViewed: false,
+            gradientColors: const [Color(0xFF5D6BFF), Color(0xFF9B8CFF)],
+            track: _track('1', 'Em Của Ngày Hôm Qua'),
+          ),
+          _story('s2', _khang),
+        ];
+      await _pump(tester, api, audio: audio);
+
+      await tester.tap(find.byType(StoryItem).at(1));
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump();
+      expect(audio.played, [
+        'https://audio-ssl.itunes.apple.com/preview/1.m4a',
+      ]);
+      expect(audio.loops, [true]);
+      expect(
+        find.textContaining('Em Của Ngày Hôm Qua · Sơn Tùng M-TP'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byTooltip('Tắt nhạc'));
+      await tester.pump();
+      expect(find.byTooltip('Bật nhạc'), findsOneWidget);
+      final stopsWhenMuted = audio.stops;
+      expect(stopsWhenMuted, greaterThan(0));
+
+      await tester.tap(find.byTooltip('Bật nhạc'));
+      await tester.pump();
+      expect(audio.played.length, 2); // played again
+
+      // the next story has no song: silence
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(audio.stops, greaterThan(stopsWhenMuted));
+      expect(find.byTooltip('Tắt nhạc'), findsNothing);
+    });
+
+    testWidgets('closing the viewer stops the song', (tester) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..stories = [
+          Story(
+            id: 's1',
+            user: _lan,
+            text: 'Tin s1',
+            isViewed: false,
+            gradientColors: const [Color(0xFF5D6BFF), Color(0xFF9B8CFF)],
+            track: _track('1', 'Em Của Ngày Hôm Qua'),
+          ),
+        ];
+      await _pump(tester, api, audio: audio);
+      await tester.tap(find.byType(StoryItem).at(1));
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump();
+      final before = audio.stops;
+
+      await tester.tap(find.byTooltip('Đóng tin'));
+      await tester.pumpAndSettle();
+
+      expect(audio.stops, greaterThan(before));
+    });
+
+    testWidgets(
+      'a preview that cannot play says so instead of staying silent',
+      (tester) async {
+        audio.failing = true;
+        await openNoteSheet(tester);
+        await tester.tap(find.text('Thêm nhạc'));
+        await tester.pumpAndSettle();
+        await search(tester, 'em');
+
+        await tester.tap(find.byTooltip('Nghe thử Em Của Ngày Hôm Qua'));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.textContaining('Không phát được bản nghe thử'),
+          findsOneWidget,
+        );
+        expect(
+          find.byTooltip('Dừng nghe thử'),
+          findsNothing,
+        ); // it is not "playing"
+      },
+    );
+
+    testWidgets('a story whose song cannot play says so', (tester) async {
+      audio.failing = true;
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..stories = [
+          Story(
+            id: 's1',
+            user: _lan,
+            text: 'Tin s1',
+            isViewed: false,
+            gradientColors: const [Color(0xFF5D6BFF), Color(0xFF9B8CFF)],
+            track: _track('1', 'Em Của Ngày Hôm Qua'),
+          ),
+        ];
+      await _pump(tester, api, audio: audio);
+
+      await tester.tap(find.byType(StoryItem).at(1));
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump();
+
+      // Home's scaffold below the viewer shows the message too.
+      expect(find.textContaining('Không phát được bản nghe thử'), findsWidgets);
+    });
+
+    testWidgets('the mock app offers no music', (tester) async {
+      await pumpSocialHub(tester);
+
+      await tester.tap(find.byType(StoryItem).first);
+      await tester.pumpAndSettle();
+
+      expect(find.byTooltip('Thêm nhạc'), findsNothing);
     });
   });
 

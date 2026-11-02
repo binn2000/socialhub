@@ -10,7 +10,9 @@ import 'package:flutter_learning/models/post.dart';
 import 'package:flutter_learning/models/post_interactions.dart';
 import 'package:flutter_learning/models/server_tab.dart';
 import 'package:flutter_learning/models/story.dart';
+import 'package:flutter_learning/models/music_track.dart';
 import 'package:flutter_learning/models/user.dart';
+import 'package:flutter_learning/models/user_note.dart';
 import 'package:flutter_learning/screens/auth_screen.dart';
 import 'package:flutter_learning/screens/create_post_screen.dart';
 import 'package:flutter_learning/screens/chat_screen.dart';
@@ -25,8 +27,10 @@ import 'package:flutter_learning/screens/post_detail_screen.dart';
 import 'package:flutter_learning/screens/profile_screen.dart';
 import 'package:flutter_learning/screens/blocked_users_screen.dart';
 import 'package:flutter_learning/screens/saved_posts_screen.dart';
+import 'package:flutter_learning/screens/story_viewer_screen.dart';
 import 'package:flutter_learning/screens/story_creator_screen.dart';
 import 'package:flutter_learning/screens/user_profile_screen.dart';
+import 'package:flutter_learning/services/audio_preview.dart';
 import 'package:flutter_learning/services/http_social_api.dart';
 import 'package:flutter_learning/services/mock_social_api.dart';
 import 'package:flutter_learning/services/photo_picker.dart';
@@ -52,6 +56,7 @@ void main() {
               tokenStore: const SecureTokenStore(),
             ),
       push: _apiBaseUrl.isEmpty ? null : FirebasePushService(),
+      audio: _apiBaseUrl.isEmpty ? null : JustAudioPreview(),
     ),
   );
 }
@@ -70,11 +75,15 @@ class SocialHubApp extends StatefulWidget {
   /// Push notifications. Defaults to none (the mock app and the tests).
   final PushService? push;
 
+  /// Plays song previews. Defaults to silence (the mock app and the tests).
+  final AudioPreview? audio;
+
   const SocialHubApp({
     super.key,
     this.api,
     this.pickPhoto = pickPhotoPath,
     this.push,
+    this.audio,
   });
 
   @override
@@ -164,6 +173,7 @@ class _SocialHubAppState extends State<SocialHubApp> {
               initialUser: user,
               pickPhoto: widget.pickPhoto,
               push: _push,
+              audio: widget.audio ?? const NoAudioPreview(),
               onLogout: _signOut,
               isDarkMode: _isDarkMode,
               onToggleTheme: () => setState(() => _isDarkMode = !_isDarkMode),
@@ -177,6 +187,7 @@ class MainScreen extends StatefulWidget {
   final UserModel initialUser;
   final Future<String?> Function() pickPhoto;
   final PushService push;
+  final AudioPreview audio;
   final Future<void> Function({String? notice}) onLogout;
   final bool isDarkMode;
   final VoidCallback onToggleTheme;
@@ -187,6 +198,7 @@ class MainScreen extends StatefulWidget {
     required this.initialUser,
     required this.pickPhoto,
     this.push = const NoPushService(),
+    this.audio = const NoAudioPreview(),
     required this.onLogout,
     required this.isDarkMode,
     required this.onToggleTheme,
@@ -207,6 +219,10 @@ class _MainScreenState extends State<MainScreen> {
   // Updated in place (not replaced) on purpose: an open ChatScreen keeps a
   // reference to this list and re-reads it after each message it sends.
   final List<Conversation> _conversations = [];
+
+  // My note and my friends' notes. Updated in place, like [_conversations],
+  // because the Messages screen is a separate route that keeps this list.
+  final List<UserNote> _notes = [];
   List<SocialNotification> _notifications = [];
   // Session-only UI state for the Home post menu, keyed by post id.
   // Posts themselves stay in _posts; these sets only change how Home shows
@@ -542,6 +558,62 @@ class _MainScreenState extends State<MainScreen> {
     return result;
   }
 
+  /// Opens the stories of one person (from their profile), or mine.
+  Future<void> _openStoriesOf(UserModel user) async {
+    List<Story> stories;
+    if (user.id == _currentUser.id) {
+      stories = _stories.where((s) => s.user.id == user.id).toList();
+    } else {
+      try {
+        stories = await _guard(() => widget.api.loadUserStories(user.id));
+      } on ApiException catch (error) {
+        if (!mounted || error.isUnauthenticated) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.displayMessage)));
+        return;
+      }
+    }
+    if (!mounted) return;
+    if (stories.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Không có tin để xem')));
+      return;
+    }
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => StoryViewerScreen(
+          stories: stories,
+          initialIndex: 0,
+          onViewed: _handleStoryViewed,
+          currentUserId: _currentUser.id,
+          onDelete: _handleDeleteStory,
+          onChangePrivacy: _handleStoryPrivacy,
+          audio: widget.audio,
+        ),
+      ),
+    );
+  }
+
+  /// Changes who can see one of my stories; undone with a message if refused.
+  void _handleStoryPrivacy(Story story, String privacy) {
+    final value = privacyValue(privacy);
+    if (value == null) return;
+    final before = _stories;
+    setState(() {
+      _stories = [
+        for (final s in _stories)
+          s.id == story.id ? s.copyWith(privacy: privacy) : s,
+      ];
+    });
+    _sync(
+      () => widget.api.updateStoryPrivacy(story.id, value),
+      rollback: () => _stories = before,
+    );
+  }
+
   /// Deletes one of my stories; it disappears at once and comes back with a
   /// message if the server refuses.
   void _handleDeleteStory(Story story) {
@@ -634,6 +706,7 @@ class _MainScreenState extends State<MainScreen> {
         _loadError = null;
         _loadedAt = DateTime.now();
       });
+      _loadNotes();
     } on ApiException catch (error) {
       if (!mounted) return;
       if (error.isUnauthenticated) {
@@ -878,6 +951,8 @@ class _MainScreenState extends State<MainScreen> {
         builder: (_) => UserProfileScreen(
           user: user,
           onOpenProfile: _openProfile,
+          onOpenStories: _openStoriesOf,
+          audio: widget.audio,
           onLoadPhotos: (userId, cursor) =>
               _guard(() => widget.api.loadUserPhotos(userId, cursor: cursor)),
           onLoadFriends: (userId, cursor) =>
@@ -1181,6 +1256,51 @@ class _MainScreenState extends State<MainScreen> {
     });
   }
 
+  /// Fetches the notes. They are a nicety, so a failure leaves the old ones.
+  Future<void> _loadNotes() async {
+    if (!widget.api.isRemote) return;
+    try {
+      final fresh = await widget.api.loadNotes();
+      if (!mounted) return;
+      _notes
+        ..clear()
+        ..addAll(fresh);
+      _chatChanges.value++;
+    } on ApiException {
+      // The next refresh tries again.
+    }
+  }
+
+  Future<List<MusicTrack>> _searchMusic(String query) =>
+      _guard(() => widget.api.searchMusic(query));
+
+  /// Shares my note; the error goes to the sheet that asked.
+  Future<void> _handleSetNote(
+    String text,
+    MusicTrack? track,
+    String privacy,
+  ) async {
+    final note = await _guard(
+      () => widget.api.setNote(
+        text,
+        track: track,
+        privacy: privacyValue(privacy),
+      ),
+    );
+    if (!mounted) return;
+    _notes
+      ..removeWhere((n) => n.user.id == _currentUser.id)
+      ..insert(0, note);
+    _chatChanges.value++;
+  }
+
+  Future<void> _handleDeleteNote() async {
+    await _guard(() => widget.api.deleteNote());
+    if (!mounted) return;
+    _notes.removeWhere((n) => n.user.id == _currentUser.id);
+    _chatChanges.value++;
+  }
+
   void _openMessages() {
     if (widget.api.isRemote) {
       _conversationsTimer?.cancel();
@@ -1190,11 +1310,17 @@ class _MainScreenState extends State<MainScreen> {
       );
     }
 
+    _loadNotes();
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => MessagesScreen(
           conversations: _conversations,
+          notes: widget.api.isRemote ? _notes : null,
+          onSetNote: widget.api.isRemote ? _handleSetNote : null,
+          onDeleteNote: widget.api.isRemote ? _handleDeleteNote : null,
+          onSearchMusic: widget.api.isRemote ? _searchMusic : null,
+          audio: widget.audio,
           onOpenConversation: _openConversation,
           refresh: widget.api.isRemote ? _chatChanges : null,
           friends: widget.api.isRemote ? _friendsToMessage : null,
@@ -1222,6 +1348,7 @@ class _MainScreenState extends State<MainScreen> {
 
   /// Re-reads the conversation list, keeping the messages already loaded.
   Future<void> _refreshConversations() async {
+    _loadNotes(); // notes come and go every day
     try {
       final fresh = await _guard(() => widget.api.loadConversations());
       if (!mounted) return;
@@ -1701,16 +1828,8 @@ class _MainScreenState extends State<MainScreen> {
         .toList();
     _stories = _stories
         .map(
-          (story) => story.user.id == user.id
-              ? Story(
-                  id: story.id,
-                  user: user,
-                  imageUrl: story.imageUrl,
-                  text: story.text,
-                  isViewed: story.isViewed,
-                  gradientColors: story.gradientColors,
-                )
-              : story,
+          (story) =>
+              story.user.id == user.id ? story.copyWith(user: user) : story,
         )
         .toList();
   }
@@ -1798,6 +1917,9 @@ class _MainScreenState extends State<MainScreen> {
                 currentUser: _currentUser,
                 onStoryCreated: _handleAddStory,
                 onPickPhoto: widget.api.isRemote ? _pickPhoto : null,
+                onSearchMusic: widget.api.isRemote ? _searchMusic : null,
+                audio: widget.audio,
+                showPrivacy: widget.api.isRemote,
               ),
             ),
           );
@@ -1818,6 +1940,8 @@ class _MainScreenState extends State<MainScreen> {
             ? (filter, {bool more = false}) => _loadFeedTab(filter, more: more)
             : null,
         onDeleteStory: widget.api.isRemote ? _handleDeleteStory : null,
+        onChangeStoryPrivacy: widget.api.isRemote ? _handleStoryPrivacy : null,
+        audio: widget.audio,
       ),
       ExploreScreen(
         posts: explorePosts,
@@ -1874,6 +1998,16 @@ class _MainScreenState extends State<MainScreen> {
       ProfileScreen(
         posts: _posts,
         user: _currentUser,
+        note: widget.api.isRemote
+            ? _notes.where((n) => n.user.id == _currentUser.id).firstOrNull
+            : null,
+        audio: widget.audio,
+        hasStories:
+            widget.api.isRemote &&
+            _stories.any((s) => s.user.id == _currentUser.id),
+        onOpenStories: widget.api.isRemote
+            ? () => _openStoriesOf(_currentUser)
+            : null,
         friends: _users
             .where((u) => u.isFriend && u.id != _currentUser.id)
             .toList(),

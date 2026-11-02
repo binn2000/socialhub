@@ -1,5 +1,6 @@
 import 'package:flutter_learning/models/post.dart';
 import 'package:flutter_learning/models/user.dart';
+import 'package:flutter_learning/models/user_note.dart';
 
 /// How the current user is related to another user.
 enum Friendship { none, pendingOutgoing, pendingIncoming, friends, self }
@@ -22,6 +23,12 @@ class UserProfile {
   final int followersCount;
   final int followingCount;
 
+  /// The person's active note, if the current user may see it.
+  final UserNote? note;
+
+  /// Whether they have stories the current user may open.
+  final bool hasStories;
+
   const UserProfile({
     required this.user,
     required this.friendship,
@@ -32,5 +39,7 @@ class UserProfile {
     this.followsYou = false,
     this.followersCount = 0,
     this.followingCount = 0,
+    this.note,
+    this.hasStories = false,
   });
 }

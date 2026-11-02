@@ -4,6 +4,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_learning/models/story.dart';
+import 'package:flutter_learning/services/audio_preview.dart';
+import 'package:flutter_learning/widgets/privacy_sheet.dart';
 import 'package:flutter_learning/widgets/mock_image.dart';
 import 'package:flutter_learning/widgets/user_avatar.dart';
 
@@ -20,6 +22,12 @@ class StoryViewerScreen extends StatefulWidget {
   final String? currentUserId;
   final ValueChanged<Story>? onDelete;
 
+  /// Changes who can see one of my stories (server only).
+  final void Function(Story story, String privacy)? onChangePrivacy;
+
+  /// Plays the song of the story on show. Stories without a song are silent.
+  final AudioPreview audio;
+
   const StoryViewerScreen({
     super.key,
     required this.stories,
@@ -27,6 +35,8 @@ class StoryViewerScreen extends StatefulWidget {
     this.onViewed,
     this.currentUserId,
     this.onDelete,
+    this.onChangePrivacy,
+    this.audio = const NoAudioPreview(),
   });
 
   @override
@@ -38,11 +48,22 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
   late final List<Story> _stories;
   late int _currentIndex;
   Timer? _autoAdvanceTimer;
+  bool _muted = false;
+
+  /// Plays the song of the story on show, or silences the last one.
+  void _syncAudio() {
+    final track = _stories.isEmpty ? null : _stories[_currentIndex].track;
+    if (track == null || _muted) {
+      widget.audio.stop();
+    } else {
+      playPreview(context, widget.audio, track.previewUrl, loop: true);
+    }
+  }
 
   @override
   void initState() {
     super.initState();
-    _stories = widget.stories;
+    _stories = List.of(widget.stories);
     if (_stories.isEmpty) {
       _currentIndex = 0;
       _pageController = PageController();
@@ -53,13 +74,16 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
     // After the first frame: the callback may call setState on a screen
     // behind this one, which is not allowed while this one is being built.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) widget.onViewed?.call(_stories[_currentIndex]);
+      if (!mounted) return;
+      widget.onViewed?.call(_stories[_currentIndex]);
+      _syncAudio();
     });
     _startAutoAdvance();
   }
 
   @override
   void dispose() {
+    widget.audio.stop();
     _autoAdvanceTimer?.cancel();
     _pageController.dispose();
     super.dispose();
@@ -80,6 +104,21 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
         Navigator.pop(context);
       }
     });
+  }
+
+  Future<void> _changePrivacy(Story story) async {
+    // The next story must not slide in behind the sheet.
+    _autoAdvanceTimer?.cancel();
+    final label = await showPrivacySheet(context, current: story.privacy);
+    if (!mounted) return;
+    if (label != null) {
+      widget.onChangePrivacy!(story, label);
+      final index = _stories.indexWhere((s) => s.id == story.id);
+      if (index != -1) {
+        setState(() => _stories[index] = story.copyWith(privacy: label));
+      }
+    }
+    _startAutoAdvance();
   }
 
   Future<void> _confirmDelete(Story story) async {
@@ -160,6 +199,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                   _currentIndex = index;
                 });
                 widget.onViewed?.call(_stories[index]);
+                _syncAudio();
                 _startAutoAdvance();
               },
               itemBuilder: (context, index) {
@@ -217,7 +257,10 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                                   ),
                                 ),
                                 Text(
-                                  'Just now',
+                                  story.user.id == widget.currentUserId &&
+                                          widget.onChangePrivacy != null
+                                      ? '${story.time} · ${story.privacy}'
+                                      : story.time,
                                   style: TextStyle(
                                     color: Colors.white.withValues(alpha: 0.75),
                                     fontSize: 12,
@@ -226,6 +269,30 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                               ],
                             ),
                           ),
+                          if (widget.onChangePrivacy != null &&
+                              story.user.id == widget.currentUserId)
+                            IconButton(
+                              onPressed: () => _changePrivacy(story),
+                              tooltip: 'Đổi quyền riêng tư của tin',
+                              icon: const Icon(
+                                Icons.lock_outline_rounded,
+                                color: Colors.white,
+                              ),
+                            ),
+                          if (story.track != null)
+                            IconButton(
+                              onPressed: () {
+                                setState(() => _muted = !_muted);
+                                _syncAudio();
+                              },
+                              tooltip: _muted ? 'Bật nhạc' : 'Tắt nhạc',
+                              icon: Icon(
+                                _muted
+                                    ? Icons.volume_off_rounded
+                                    : Icons.volume_up_rounded,
+                                color: Colors.white,
+                              ),
+                            ),
                           if (widget.onDelete != null &&
                               story.user.id == widget.currentUserId)
                             IconButton(
@@ -285,13 +352,6 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                                   ),
                                 ),
                               ),
-                              IconButton(
-                                onPressed: () {},
-                                icon: const Icon(
-                                  Icons.favorite_border_rounded,
-                                  color: Colors.white,
-                                ),
-                              ),
                             ],
                           ),
                           const SizedBox(height: 8),
@@ -303,6 +363,30 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                               fontSize: 16,
                             ),
                           ),
+                          if (story.track != null) ...[
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                const Icon(
+                                  Icons.music_note_rounded,
+                                  color: Colors.white,
+                                  size: 18,
+                                ),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    '${story.track!.title} · ${story.track!.artist}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
                         ],
                       ),
                     ),

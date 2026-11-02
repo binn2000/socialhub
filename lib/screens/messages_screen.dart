@@ -2,10 +2,14 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_learning/models/message.dart';
+import 'package:flutter_learning/models/music_track.dart';
 import 'package:flutter_learning/models/user.dart';
+import 'package:flutter_learning/models/user_note.dart';
 import 'package:flutter_learning/screens/chat_screen.dart';
+import 'package:flutter_learning/services/audio_preview.dart';
 import 'package:flutter_learning/services/social_api.dart' show ApiException;
 import 'package:flutter_learning/theme/app_tokens.dart';
+import 'package:flutter_learning/widgets/notes_row.dart';
 import 'package:flutter_learning/widgets/post_parts.dart';
 import 'package:flutter_learning/widgets/user_avatar.dart';
 
@@ -32,6 +36,18 @@ class MessagesScreen extends StatefulWidget {
   final Future<List<Conversation>> Function(String query)?
   onSearchConversations;
 
+  /// The notes row above the conversations: the notes to show (the list is
+  /// updated in place, like [conversations]), how to share or remove mine.
+  /// All null on the mock app, which has no notes.
+  final List<UserNote>? notes;
+  final Future<void> Function(String text, MusicTrack? track, String privacy)?
+  onSetNote;
+  final Future<void> Function()? onDeleteNote;
+
+  /// Finding and previewing songs for notes (server only).
+  final Future<List<MusicTrack>> Function(String query)? onSearchMusic;
+  final AudioPreview audio;
+
   /// Used by the 2-column Desktop chat pane.
   final UserModel? currentUser;
   final void Function(
@@ -52,6 +68,11 @@ class MessagesScreen extends StatefulWidget {
     this.friends,
     this.onStartConversation,
     this.onSearchConversations,
+    this.notes,
+    this.onSetNote,
+    this.onDeleteNote,
+    this.onSearchMusic,
+    this.audio = const NoAudioPreview(),
     this.currentUser,
     this.onSendMessage,
     this.onSelectDesktopConversation,
@@ -210,6 +231,20 @@ class _MessagesScreenState extends State<MessagesScreen> {
 
     return Column(
       children: [
+        if (widget.notes != null &&
+            widget.onSetNote != null &&
+            widget.onDeleteNote != null &&
+            widget.currentUser != null &&
+            widget.onStartConversation != null)
+          NotesRow(
+            notes: widget.notes!,
+            currentUser: widget.currentUser!,
+            onSetNote: widget.onSetNote!,
+            onDeleteNote: widget.onDeleteNote!,
+            onReply: widget.onStartConversation!,
+            searchMusic: widget.onSearchMusic,
+            audio: widget.audio,
+          ),
         Padding(
           padding: const EdgeInsets.fromLTRB(
             AppSpacing.lg,
@@ -358,7 +393,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
         title: const Text(
-          'Messages',
+          'Tin nhắn',
           style: TextStyle(fontWeight: FontWeight.w700),
         ),
         actions: [

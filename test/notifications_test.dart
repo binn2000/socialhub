@@ -93,7 +93,7 @@ void main() {
 
       await tapTab(tester, notificationsTab);
 
-      expect(find.text('Thông báo'), findsOneWidget);
+      expect(find.widgetWithText(AppBar, 'Thông báo'), findsOneWidget);
       expect(_unreadRows, findsNothing);
       expect(_readRows, findsNWidgets(mockNotifications.length));
       expect(find.byType(Badge), findsNothing);
@@ -125,7 +125,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.widgetWithText(AppBar, 'Friends'), findsOneWidget);
+      expect(find.widgetWithText(AppBar, 'Bạn bè'), findsOneWidget);
     });
 
     testWidgets('like notification opens Home', (tester) async {
