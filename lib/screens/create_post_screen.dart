@@ -435,7 +435,7 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
                       Expanded(
                         child: Text(
                           _preparingVideo
-                              ? 'Đang nén video, vui lòng đợi...'
+                              ? 'Vui lòng đợi...'
                               : _videoPath == null
                               ? 'Thêm video (tối đa 60 giây)'
                               : 'Đã chọn 1 video',
