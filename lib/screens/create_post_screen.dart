@@ -5,6 +5,7 @@ import 'package:flutter_learning/models/user.dart';
 import 'package:flutter_learning/widgets/mock_image.dart';
 import 'package:flutter_learning/theme/app_tokens.dart';
 import 'package:flutter_learning/widgets/user_avatar.dart';
+import 'package:flutter_learning/widgets/video_draft_preview.dart';
 
 class CreatePostScreen extends StatefulWidget {
   final UserModel currentUser;
@@ -463,6 +464,14 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
                       ],
                     ],
                   ),
+                ),
+              ],
+              if (_videoPath != null) ...[
+                const SizedBox(height: 12),
+                VideoDraftPreview(
+                  key: ValueKey(_videoPath),
+                  path: _videoPath!,
+                  onRemove: () => setState(() => _videoPath = null),
                 ),
               ],
               if (_photoPaths.length > 1) ...[

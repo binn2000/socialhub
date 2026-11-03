@@ -17,6 +17,7 @@ import 'package:flutter_learning/models/story.dart';
 import 'package:flutter_learning/models/user.dart';
 import 'package:flutter_learning/models/user_note.dart';
 import 'package:flutter_learning/models/user_profile.dart';
+import 'package:flutter_learning/widgets/video_draft_preview.dart';
 import 'package:flutter_learning/services/video_compressor.dart';
 import 'package:flutter_learning/services/audio_preview.dart';
 import 'package:flutter_learning/services/push_service.dart';
@@ -988,6 +989,7 @@ void main() {
       await tester.tap(find.text('Chọn video'));
       await tester.pumpAndSettle();
       expect(find.text('Đã chọn 1 video'), findsOneWidget);
+      expect(find.byType(VideoDraftPreview), findsOneWidget);
       await tester.tap(find.text('Đăng'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
@@ -1039,6 +1041,30 @@ void main() {
       expect(find.text('Video dài tối đa 60 giây'), findsOneWidget);
       expect(find.text('Đã chọn 1 video'), findsNothing);
       expect(find.text('Chọn video'), findsOneWidget);
+    });
+
+    testWidgets('the picked video shows like a photo and can be removed', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me);
+      await _pump(tester, api, pickVideo: () async => '/videos/trip.mp4');
+
+      await tapTab(tester, createTab);
+      await tester.tap(find.text('Chọn video'));
+      await tester.pumpAndSettle();
+      expect(find.byType(VideoDraftPreview), findsOneWidget);
+
+      await tester.ensureVisible(find.byIcon(Icons.close_rounded));
+      await tester.tap(find.byIcon(Icons.close_rounded));
+      await tester.pumpAndSettle();
+      expect(find.byType(VideoDraftPreview), findsNothing);
+      expect(find.text('Chọn video'), findsOneWidget);
+
+      await tester.enterText(find.byType(TextField), 'Chỉ còn chữ');
+      await tester.tap(find.text('Đăng'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(api.createdPosts.single.video, isNull);
     });
 
     testWidgets('a picked photo replaces a picked video', (tester) async {
