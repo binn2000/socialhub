@@ -17,6 +17,7 @@ import 'package:flutter_learning/models/story.dart';
 import 'package:flutter_learning/models/user.dart';
 import 'package:flutter_learning/models/user_note.dart';
 import 'package:flutter_learning/models/user_profile.dart';
+import 'package:flutter_learning/services/video_compressor.dart';
 import 'package:flutter_learning/services/audio_preview.dart';
 import 'package:flutter_learning/services/push_service.dart';
 import 'package:flutter_learning/services/social_api.dart';
@@ -759,6 +760,7 @@ Future<void> _pump(
   _FakeRemoteApi api, {
   Future<String?> Function()? pickPhoto,
   Future<String?> Function()? pickVideo,
+  Future<String> Function(String path)? compressVideo,
   PushService? push,
   AudioPreview? audio,
 }) async {
@@ -767,6 +769,7 @@ Future<void> _pump(
       api: api,
       pickPhoto: pickPhoto ?? () async => null,
       pickVideo: pickVideo ?? () async => null,
+      compressVideo: compressVideo ?? (path) async => path,
       push: push,
       audio: audio,
     ),
@@ -992,6 +995,50 @@ void main() {
       final draft = api.createdPosts.single;
       expect(draft.video?.localPath, '/videos/trip.mp4');
       expect(draft.imageUrl, isNull);
+    });
+
+    testWidgets('a picked video is compressed before it is sent', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me);
+      String? compressed;
+      await _pump(
+        tester,
+        api,
+        pickVideo: () async => '/videos/big.mov',
+        compressVideo: (path) async => compressed = '$path.small.mp4',
+      );
+
+      await tapTab(tester, createTab);
+      await tester.tap(find.text('Chọn video'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Đăng'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(compressed, '/videos/big.mov.small.mp4');
+      expect(api.createdPosts.single.video?.localPath, compressed);
+    });
+
+    testWidgets('a video the phone cannot shrink enough is refused', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me);
+      await _pump(
+        tester,
+        api,
+        pickVideo: () async => '/videos/huge.mov',
+        compressVideo: (path) async =>
+            throw const VideoRejected('Video dài tối đa 60 giây'),
+      );
+
+      await tapTab(tester, createTab);
+      await tester.tap(find.text('Chọn video'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Video dài tối đa 60 giây'), findsOneWidget);
+      expect(find.text('Đã chọn 1 video'), findsNothing);
+      expect(find.text('Chọn video'), findsOneWidget);
     });
 
     testWidgets('a picked photo replaces a picked video', (tester) async {

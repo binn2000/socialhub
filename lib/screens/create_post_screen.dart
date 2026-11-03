@@ -61,6 +61,7 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
   MockImageChoice? _selectedImage;
   String? _photoPath;
   String? _videoPath;
+  bool _preparingVideo = false;
   String? _statusMessage;
   bool _statusIsError = false;
 
@@ -104,7 +105,13 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
   }
 
   Future<void> _pickVideo() async {
-    final path = await widget.onPickVideo!();
+    setState(() => _preparingVideo = true);
+    final String? path;
+    try {
+      path = await widget.onPickVideo!();
+    } finally {
+      if (mounted) setState(() => _preparingVideo = false);
+    }
     if (path == null || !mounted) return;
     setState(() {
       _videoPath = path;
@@ -427,23 +434,33 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          _videoPath == null
+                          _preparingVideo
+                              ? 'Đang nén video, vui lòng đợi...'
+                              : _videoPath == null
                               ? 'Thêm video (tối đa 60 giây)'
                               : 'Đã chọn 1 video',
                           style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
                       ),
-                      if (_videoPath != null)
+                      if (_preparingVideo)
+                        const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      else ...[
+                        if (_videoPath != null)
+                          TextButton(
+                            onPressed: () => setState(() => _videoPath = null),
+                            child: const Text('Xóa video'),
+                          ),
                         TextButton(
-                          onPressed: () => setState(() => _videoPath = null),
-                          child: const Text('Xóa video'),
+                          onPressed: _pickVideo,
+                          child: Text(
+                            _videoPath == null ? 'Chọn video' : 'Đổi video',
+                          ),
                         ),
-                      TextButton(
-                        onPressed: _pickVideo,
-                        child: Text(
-                          _videoPath == null ? 'Chọn video' : 'Đổi video',
-                        ),
-                      ),
+                      ],
                     ],
                   ),
                 ),

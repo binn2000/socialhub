@@ -31,6 +31,7 @@ import 'package:flutter_learning/screens/saved_posts_screen.dart';
 import 'package:flutter_learning/screens/story_viewer_screen.dart';
 import 'package:flutter_learning/screens/story_creator_screen.dart';
 import 'package:flutter_learning/screens/user_profile_screen.dart';
+import 'package:flutter_learning/services/video_compressor.dart';
 import 'package:flutter_learning/services/audio_preview.dart';
 import 'package:flutter_learning/services/http_social_api.dart';
 import 'package:flutter_learning/services/mock_social_api.dart';
@@ -73,6 +74,7 @@ class SocialHubApp extends StatefulWidget {
   /// Opens the photo library; tests replace it with a fake.
   final Future<String?> Function() pickPhoto;
   final Future<String?> Function() pickVideo;
+  final Future<String> Function(String path) compressVideo;
 
   /// Push notifications. Defaults to none (the mock app and the tests).
   final PushService? push;
@@ -85,6 +87,7 @@ class SocialHubApp extends StatefulWidget {
     this.api,
     this.pickPhoto = pickPhotoPath,
     this.pickVideo = pickVideoPath,
+    this.compressVideo = compressVideoFile,
     this.push,
     this.audio,
   });
@@ -176,6 +179,7 @@ class _SocialHubAppState extends State<SocialHubApp> {
               initialUser: user,
               pickPhoto: widget.pickPhoto,
               pickVideo: widget.pickVideo,
+              compressVideo: widget.compressVideo,
               push: _push,
               audio: widget.audio ?? const NoAudioPreview(),
               onLogout: _signOut,
@@ -191,6 +195,7 @@ class MainScreen extends StatefulWidget {
   final UserModel initialUser;
   final Future<String?> Function() pickPhoto;
   final Future<String?> Function() pickVideo;
+  final Future<String> Function(String path) compressVideo;
   final PushService push;
   final AudioPreview audio;
   final Future<void> Function({String? notice}) onLogout;
@@ -203,6 +208,7 @@ class MainScreen extends StatefulWidget {
     required this.initialUser,
     required this.pickPhoto,
     required this.pickVideo,
+    required this.compressVideo,
     this.push = const NoPushService(),
     this.audio = const NoAudioPreview(),
     required this.onLogout,
@@ -1773,7 +1779,15 @@ class _MainScreenState extends State<MainScreen> {
   /// a message instead of crashing.
   Future<String?> _pickVideo() async {
     try {
-      return await widget.pickVideo();
+      final picked = await widget.pickVideo();
+      if (picked == null) return null;
+      return await widget.compressVideo(picked);
+    } on VideoRejected catch (error) {
+      if (!mounted) return null;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+      return null;
     } on PlatformException {
       if (!mounted) return null;
       ScaffoldMessenger.of(context).showSnackBar(
