@@ -11,6 +11,7 @@ use Throwable;
 /**
  * Proves the configured images disk really works: write a tiny file, read it back over
  * its public URL, delete it. Run it once against a real bucket after setting IMAGES_DISK=s3.
+ * No per-file ACL is sent: R2 and B2 reject them, so the bucket itself must be public.
  */
 class CheckImageDisk extends Command
 {
@@ -27,7 +28,7 @@ class CheckImageDisk extends Command
         $this->line("Disk: {$name}");
 
         try {
-            $disk->put($path, $body, 'public') ?: throw new \RuntimeException('put() returned false');
+            $disk->put($path, $body) ?: throw new \RuntimeException('put() returned false');
             $this->info('1/3 upload ok');
 
             if ($this->option('skip-url')) {
@@ -37,6 +38,7 @@ class CheckImageDisk extends Command
                 $response = Http::timeout(15)->get($url);
                 if (! $response->successful() || $response->body() !== $body) {
                     $this->error("2/3 {$url} answered {$response->status()}: files must be readable by URL without signing");
+                    $disk->delete($path);
 
                     return self::FAILURE;
                 }
