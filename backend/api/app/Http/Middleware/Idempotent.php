@@ -6,7 +6,10 @@ use Closure;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -18,6 +21,7 @@ use Symfony\Component\HttpFoundation\Response;
 class Idempotent
 {
     private const TTL_HOURS = 24;
+
     private const STALE_MINUTES = 5; // an unfinished first request older than this is assumed dead
 
     public function handle(Request $request, Closure $next): Response
@@ -30,6 +34,8 @@ class Idempotent
         if (! preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $key)) {
             throw ValidationException::withMessages(['Idempotency-Key' => [__('The Idempotency-Key must be a UUID.')]]);
         }
+
+        $this->rejectBrokenUploads($request);
 
         $key = strtolower($key);
         $userId = $request->user()->id;
@@ -106,13 +112,30 @@ class Idempotent
         ]);
     }
 
+    /**
+     * A file PHP refused or lost (over upload_max_filesize, connection dropped) has no temporary file to
+     * hash; answer 422 with the reason in the log instead of failing with a 500.
+     */
+    private function rejectBrokenUploads(Request $request): void
+    {
+        foreach (Arr::dot($request->allFiles()) as $name => $file) {
+            if (! $file->isValid()) {
+                Log::warning('Upload rejected: '.$file->getErrorMessage(), ['field' => $name, 'user' => $request->user()->id]);
+
+                throw ValidationException::withMessages([
+                    Str::before($name, '.') => [__('The upload failed: the file is too large or the connection was lost. Videos can be 50 MB, photos 10 MB.')],
+                ]);
+            }
+        }
+    }
+
     /** Same method, path and content => same fingerprint (files are hashed by content, not by multipart boundary). */
     private function fingerprint(Request $request): string
     {
         $input = $request->except(array_keys($request->allFiles()));
         ksort($input);
         $files = [];
-        foreach ($request->allFiles() as $name => $file) {
+        foreach (Arr::dot($request->allFiles()) as $name => $file) {
             $files[$name] = [$file->getClientOriginalName(), $file->getSize(), md5_file($file->getRealPath())];
         }
 

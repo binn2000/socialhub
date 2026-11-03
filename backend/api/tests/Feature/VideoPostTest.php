@@ -11,6 +11,7 @@ use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 class VideoPostTest extends TestCase
@@ -163,5 +164,16 @@ class VideoPostTest extends TestCase
         $this->actingAs(User::factory()->create(), 'sanctum');
 
         $this->postJson('/api/v1/posts', ['content' => 'Chữ thôi'])->assertCreated()->assertJsonPath('data.video', null);
+    }
+
+    public function test_a_lost_upload_answers_422_not_500(): void
+    {
+        $this->actingAs(User::factory()->create(), 'sanctum');
+        // PHP reports a file over upload_max_filesize like this: an error code and no temporary file.
+        $lost = new UploadedFile('', 'clip.mp4', 'video/mp4', UPLOAD_ERR_INI_SIZE, true);
+
+        $this->post('/api/v1/posts', ['video' => $lost], $this->json + ['Idempotency-Key' => (string) Str::uuid()])
+            ->assertUnprocessable()->assertJsonValidationErrors('video');
+        $this->assertSame(0, Post::count());
     }
 }
