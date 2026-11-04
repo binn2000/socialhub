@@ -1032,6 +1032,8 @@ void main() {
 
       expect(find.byTooltip('Đóng ảnh'), findsOneWidget);
       expect(find.text('1/2'), findsWidgets);
+      // The pictures fill the whole screen instead of a strip at the top.
+      expect(tester.getSize(find.byType(PageView).last), const Size(800, 3000));
       await tester.tap(find.byTooltip('Đóng ảnh'));
       await tester.pumpAndSettle();
       expect(find.byTooltip('Đóng ảnh'), findsNothing);

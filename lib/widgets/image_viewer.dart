@@ -70,7 +70,10 @@ class _ImageGalleryState extends State<_ImageGallery> {
     final sources = widget.sources;
     return Scaffold(
       backgroundColor: Colors.black,
+      // expand: the Scaffold gives its body loose constraints, and a loose Stack
+      // would shrink to the little row of the counter and the close button.
       body: Stack(
+        fit: StackFit.expand,
         children: [
           Positioned.fill(
             child: PageView.builder(

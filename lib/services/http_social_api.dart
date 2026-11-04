@@ -493,7 +493,7 @@ class HttpSocialApi extends SocialApi {
     for (final path in localFiles) {
       multipartList.add(await MultipartFile.fromFile(path));
     }
-    return FormData.fromMap({...present, 'images': multipartList});
+    return FormData.fromMap({...present, 'images[]': multipartList});
   }
 
   @override
@@ -552,7 +552,7 @@ class HttpSocialApi extends SocialApi {
       }
       body = FormData.fromMap({
         if (draft.text.isNotEmpty) 'text': draft.text,
-        'attachments': multipartList,
+        'attachments[]': multipartList,
       });
     } else {
       body = {'text': draft.text};

@@ -440,6 +440,77 @@ void main() {
     expect(saved.video?.isProcessing, isTrue);
   });
 
+  test('several photos are sent as images[] so PHP reads a list', () async {
+    adapter.routes['POST /posts'] = (201, {'data': _post('99')});
+    final me = await _signedInUser(api, adapter, tokens);
+    final photos = [
+      for (final n in [1, 2])
+        File('${Directory.systemTemp.path}/http_api_test_multi$n.png')
+          ..writeAsBytesSync(const [1, 2, 3]),
+    ];
+    addTearDown(() {
+      for (final f in photos) {
+        f.deleteSync();
+      }
+    });
+
+    await api.createPost(
+      Post(
+        id: 'tmp',
+        author: me,
+        content: 'Hai ảnh',
+        privacy: 'Công khai',
+        imageUrl: photos.first.path,
+        imageUrls: [for (final f in photos) f.path],
+        createdAt: 'Vừa xong',
+        likes: 0,
+        comments: 0,
+        shares: 0,
+        isLiked: false,
+      ),
+    );
+
+    final data = adapter.last('POST /posts').data as FormData;
+    expect(data.files.map((f) => f.key), ['images[]', 'images[]']);
+  });
+
+  test('several chat attachments are sent as attachments[]', () async {
+    adapter.routes['POST /conversations/c1/messages'] = (
+      201,
+      {
+        'data': {
+          'id': 'm9',
+          'conversationId': 'c1',
+          'senderId': 'me',
+          'text': '',
+          'attachments': <Object>[],
+          'createdAt': '2026-10-23T10:00:03Z',
+        },
+      },
+    );
+    await _signedInUser(api, adapter, tokens);
+    final files = [
+      for (final n in [1, 2])
+        File('${Directory.systemTemp.path}/http_api_test_att$n.png')
+          ..writeAsBytesSync(const [1, 2, 3]),
+    ];
+    addTearDown(() {
+      for (final f in files) {
+        f.deleteSync();
+      }
+    });
+
+    await api.sendMessage(
+      'c1',
+      const ChatMessage(id: 'tmp', senderId: 'me', text: '', time: ''),
+      attachmentPaths: [for (final f in files) f.path],
+    );
+
+    final data =
+        adapter.last('POST /conversations/c1/messages').data as FormData;
+    expect(data.files.map((f) => f.key), ['attachments[]', 'attachments[]']);
+  });
+
   test('a post with a picked photo is uploaded as multipart', () async {
     adapter.routes['POST /posts'] = (201, {'data': _post('99')});
     final me = await _signedInUser(api, adapter, tokens);
