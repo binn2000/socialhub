@@ -217,7 +217,8 @@ ChatAttachment attachmentFromJson(
 }) {
   final url = json['url'] as String;
   return ChatAttachment(
-    id: json['id'] as String,
+    // The API numbers attachments (integer ids, see openapi.yaml).
+    id: '${json['id']}',
     type: json['type'] as String,
     url: absoluteUrl == null ? url : absoluteUrl(url),
     name: json['name'] as String,

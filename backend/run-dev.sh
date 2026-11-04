@@ -12,10 +12,10 @@ PHP="${PHP_BIN:-/opt/homebrew/opt/php@8.5/bin/php}"   # the default `php` is 7.4
 PORT="${PORT:-8000}"
 cd "$(dirname "$0")/api"
 
-# php.ini has no upload limits loaded here, and the defaults (2M/8M) reject photos.
-INI_DIR="$(mktemp -d)"
-printf 'upload_max_filesize=52M\npost_max_size=56M\nmemory_limit=768M\n' > "$INI_DIR/upload.ini"
-export PHP_INI_SCAN_DIR=":$INI_DIR"
+# php.ini has no upload limits loaded here, and the defaults (2M/8M) reject photos and videos.
+# `artisan serve` starts its server without our environment, so the server below is started
+# with `php -d` instead of `artisan serve`.
+PHP_LIMITS=(-d upload_max_filesize=52M -d post_max_size=56M -d memory_limit=768M)
 # The built-in server handles one request at a time unless it has workers; chat polling
 # and uploads need more.
 export PHP_CLI_SERVER_WORKERS="${PHP_CLI_SERVER_WORKERS:-4}"
@@ -24,12 +24,13 @@ export PHP_CLI_SERVER_WORKERS="${PHP_CLI_SERVER_WORKERS:-4}"
 [ -e public/storage ] || "$PHP" artisan storage:link --no-interaction
 
 pids=()
-cleanup() { kill "${pids[@]}" 2>/dev/null || true; rm -rf "$INI_DIR"; }
+cleanup() { kill "${pids[@]}" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 
 "$PHP" artisan queue:work --sleep=2 --tries=3 --timeout=320 --no-interaction & pids+=($!)
 "$PHP" artisan schedule:work --no-interaction & pids+=($!)
-"$PHP" artisan serve --host=0.0.0.0 --port="$PORT" --no-interaction & pids+=($!)
+# The router script is the one `artisan serve` uses; it must run from public/.
+(cd public && exec "$PHP" "${PHP_LIMITS[@]}" -S "0.0.0.0:${PORT}" ../vendor/laravel/framework/src/Illuminate/Foundation/resources/server.php) & pids+=($!)
 echo "API on http://0.0.0.0:${PORT}/api/v1  (queue worker and scheduler running)"
 # `wait`, not a foreground server: bash only runs the exit trap once a foreground
 # command ends, so Ctrl+C / kill would leave the worker and scheduler running.

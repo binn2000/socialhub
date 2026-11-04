@@ -159,6 +159,31 @@ void main() {
     expect(post.imageUrl, isNull);
   });
 
+  test('a message with an attachment keeps its numeric id as text', () {
+    final message = messageFromJson({
+      'id': 'm1',
+      'conversationId': 'c1',
+      'senderId': 'u1',
+      'text': '',
+      'attachments': [
+        {
+          'id': 1,
+          'type': 'image',
+          'url': 'http://localhost:8000/storage/chat/a.png',
+          'name': '01.png',
+          'mimeType': 'image/png',
+          'sizeBytes': 1776532,
+          'width': 720,
+          'height': 1280,
+        },
+      ],
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+    });
+
+    expect(message.attachments.single.id, '1');
+    expect(message.attachments.single.width, 720);
+  });
+
   test('labels convert back to the identifiers the API expects', () {
     expect(privacyValue('Bạn bè'), 'friends');
     expect(privacyValue('unknown'), isNull);
