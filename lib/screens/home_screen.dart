@@ -29,6 +29,9 @@ class HomeScreen extends StatefulWidget {
   final VoidCallback onOpenCreate;
   final VoidCallback onOpenStoryCreator;
   final VoidCallback onOpenMessages;
+
+  /// Unread messages, shown as a small number on the Messages icon.
+  final int unreadMessageCount;
   final bool isDarkMode;
   final VoidCallback onToggleTheme;
 
@@ -80,6 +83,7 @@ class HomeScreen extends StatefulWidget {
     required this.onOpenCreate,
     required this.onOpenStoryCreator,
     required this.onOpenMessages,
+    this.unreadMessageCount = 0,
     required this.isDarkMode,
     required this.onToggleTheme,
     this.interactions,
@@ -570,7 +574,16 @@ class _HomeScreenState extends State<HomeScreen> {
         IconButton(
           onPressed: widget.onOpenMessages,
           tooltip: 'Tin nhắn',
-          icon: const Icon(Icons.message_rounded),
+          icon: widget.unreadMessageCount > 0
+              ? Badge(
+                  label: Text(
+                    widget.unreadMessageCount > 99
+                        ? '99+'
+                        : '${widget.unreadMessageCount}',
+                  ),
+                  child: const Icon(Icons.message_rounded),
+                )
+              : const Icon(Icons.message_rounded),
         ),
         Padding(
           padding: const EdgeInsets.only(left: 4, right: AppSpacing.lg),

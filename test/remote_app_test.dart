@@ -2361,10 +2361,64 @@ void main() {
       expect(find.text('3'), findsOneWidget);
       expect(api.conversationListCalls, 1);
 
+      // The badge on the Messages icon needs the list, so it keeps refreshing
+      // after the screen is closed.
       await tester.pageBack();
       await tester.pumpAndSettle();
       await tester.pump(const Duration(seconds: 30));
-      expect(api.conversationListCalls, 1); // stopped with the screen
+      expect(api.conversationListCalls, greaterThan(1));
+    });
+
+    testWidgets('a full reload keeps the messages of the open chat', (
+      tester,
+    ) async {
+      final push = _FakePush();
+      final api = chatApi();
+      await tester.pumpWidget(SocialHubApp(api: api, push: push));
+      await tester.pumpAndSettle();
+      await openChat(tester);
+      expect(find.text('tin cũ'), findsWidgets);
+
+      // A push while the chat is open reloads everything (the list has no bodies).
+      push.inForeground.add(const PushMessage({'type': 'like'}));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(
+        find.text('Chưa có tin nhắn. Hãy bắt đầu cuộc trò chuyện.'),
+        findsNothing,
+      );
+      expect(find.text('tin cũ'), findsWidgets);
+    });
+
+    testWidgets('unread messages show on the Messages icon and as a banner', (
+      tester,
+    ) async {
+      final api = chatApi();
+      await _pump(tester, api);
+      expect(find.byType(Badge), findsNothing); // nothing unread at the start
+
+      api.conversations = [
+        Conversation(
+          id: 'c1',
+          user: _lan,
+          lastMessage: 'Có ở đó không?',
+          time: 'Vừa xong',
+          unreadCount: 2,
+          messages: const [],
+        ),
+      ];
+      await tester.pump(const Duration(seconds: 10));
+      await tester.pump();
+
+      expect(find.byType(Badge), findsOneWidget);
+      expect(find.text('2'), findsOneWidget);
+      expect(find.text('Lan Hương: Có ở đó không?'), findsOneWidget);
+      expect(find.text('Xem'), findsOneWidget);
+
+      // The Notifications tab is not involved.
+      await tapTab(tester, notificationsTab);
+      expect(find.text('Có ở đó không?'), findsNothing);
     });
 
     testWidgets('a conversation being read does not get an unread badge', (

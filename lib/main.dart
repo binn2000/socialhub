@@ -272,15 +272,16 @@ class _MainScreenState extends State<MainScreen> {
 
   static const _refreshAfter = Duration(seconds: 15);
   static const _chatPollEvery = Duration(seconds: 4);
-  static const _conversationsPollEvery = Duration(seconds: 15);
 
   // Polling (the server has no push): an open chat asks for newer messages,
   // an open Messages screen re-reads the conversation list.
   Timer? _chatTimer;
-  Timer? _conversationsTimer;
+  bool _messagesOpen = false;
   Timer? _presenceTimer;
   Timer? _videoTimer;
+  Timer? _inboxTimer;
   static const _presenceHeartbeatEvery = Duration(seconds: 45);
+  static const _inboxPollEvery = Duration(seconds: 10);
   String? _openChatId;
   bool _pollingChat = false;
   // Messages being sent. Polling waits for them, otherwise it could return
@@ -322,8 +323,16 @@ class _MainScreenState extends State<MainScreen> {
       _load();
       _startPush();
       _startPresenceHeartbeat();
+      _inboxTimer = Timer.periodic(
+        _inboxPollEvery,
+        (_) => _refreshConversations(),
+      );
     }
   }
+
+  /// Messages waiting in all conversations, for the badge on the Messages icon.
+  int get _unreadMessageCount =>
+      _conversations.fold(0, (sum, c) => sum + c.unreadCount);
 
   void _startPresenceHeartbeat() {
     _presenceTimer?.cancel();
@@ -398,8 +407,8 @@ class _MainScreenState extends State<MainScreen> {
     }
     _presenceTimer?.cancel();
     _videoTimer?.cancel();
+    _inboxTimer?.cancel();
     _chatTimer?.cancel();
-    _conversationsTimer?.cancel();
     _chatChanges.dispose();
     _partnerTyping.dispose();
     super.dispose();
@@ -420,9 +429,17 @@ class _MainScreenState extends State<MainScreen> {
     _stories = List<Story>.from(snapshot.stories);
     _users = List<UserModel>.from(snapshot.users);
     _pendingFriendIds = Set<String>.from(snapshot.pendingFriendIds);
+    // A full reload has no message bodies; keep the ones already loaded so an
+    // open chat does not flash its "no messages" text.
+    final loadedMessages = {for (final c in _conversations) c.id: c.messages};
     _conversations
       ..clear()
-      ..addAll(snapshot.conversations);
+      ..addAll([
+        for (final c in snapshot.conversations)
+          (c.messages.isEmpty && (loadedMessages[c.id]?.isNotEmpty ?? false))
+              ? _copyConversation(c, messages: loadedMessages[c.id])
+              : c,
+      ]);
     _notifications = List<SocialNotification>.from(snapshot.notifications);
     _friendRequests = List<FriendRequest>.from(snapshot.friendRequests);
     _feedCursor = snapshot.feedCursor;
@@ -1383,14 +1400,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   void _openMessages() {
-    if (widget.api.isRemote) {
-      _conversationsTimer?.cancel();
-      _conversationsTimer = Timer.periodic(
-        _conversationsPollEvery,
-        (_) => _refreshConversations(),
-      );
-    }
-
+    _messagesOpen = true;
     _loadNotes();
     Navigator.push(
       context,
@@ -1421,16 +1431,20 @@ class _MainScreenState extends State<MainScreen> {
           },
         ),
       ),
-    ).then((_) {
-      _conversationsTimer?.cancel();
-      _conversationsTimer = null;
-    });
+    ).then((_) => _messagesOpen = false);
   }
 
   /// Re-reads the conversation list, keeping the messages already loaded.
   Future<void> _refreshConversations() async {
-    _loadNotes(); // notes come and go every day
+    if (_refreshingConversations || _loading || _loadedAt == null) return;
+    _refreshingConversations = true;
+    if (_messagesOpen) {
+      _loadNotes(); // notes come and go every day
+    }
     try {
+      final unreadBefore = {
+        for (final c in _conversations) c.id: c.unreadCount,
+      };
       final fresh = await _guard(() => widget.api.loadConversations());
       if (!mounted) return;
       setState(() {
@@ -1454,8 +1468,42 @@ class _MainScreenState extends State<MainScreen> {
           ..addAll(merged);
         _chatChanges.value++;
       });
+      _announceNewMessages(unreadBefore);
     } on ApiException {
       // The next poll tries again.
+    } finally {
+      _refreshingConversations = false;
+    }
+  }
+
+  bool _refreshingConversations = false;
+
+  /// Tells the user about a message that arrived since the last look, on
+  /// whatever screen is open. This is not a notification of the Notifications
+  /// tab; the badge on the Messages icon keeps counting until it is read.
+  void _announceNewMessages(Map<String, int> unreadBefore) {
+    for (final conversation in _conversations) {
+      final before = unreadBefore[conversation.id] ?? 0;
+      if (conversation.unreadCount <= before ||
+          conversation.id == _openChatId) {
+        continue;
+      }
+      final preview = conversation.lastMessage.isEmpty
+          ? 'đã gửi cho bạn một tin nhắn'
+          : conversation.lastMessage;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            content: Text('${conversation.user.name}: $preview'),
+            action: SnackBarAction(
+              label: 'Xem',
+              onPressed: () => _openConversation(conversation),
+            ),
+          ),
+        );
+      return; // one banner at a time; the badge has the full count
     }
   }
 
@@ -2005,6 +2053,7 @@ class _MainScreenState extends State<MainScreen> {
     // One screen per AppTab, in the same order.
     final screens = <Widget>[
       HomeScreen(
+        unreadMessageCount: widget.api.isRemote ? _unreadMessageCount : 0,
         currentUser: _currentUser,
         posts: homePosts,
         stories: _stories,
