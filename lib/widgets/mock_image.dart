@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_learning/widgets/image_viewer.dart';
 import 'package:flutter_learning/widgets/post_video_view.dart';
 import 'package:flutter_learning/models/post.dart';
 import 'package:flutter_learning/theme/app_tokens.dart';
@@ -113,7 +114,8 @@ class MockImagePreview extends StatelessWidget {
 class PostMedia extends StatelessWidget {
   final Post post;
 
-  /// Whether a server video starts when tapped (see [PostVideoView]).
+  /// Whether a tap opens the media: a server video plays, a server picture
+  /// opens full screen ([PostVideoView], [showImageGallery]).
   final bool playable;
 
   const PostMedia({super.key, required this.post, this.playable = true});
@@ -135,6 +137,7 @@ class PostMedia extends StatelessWidget {
         post: post,
         images: images,
         fallback: fallback,
+        openable: playable,
       );
     }
 
@@ -142,7 +145,16 @@ class PostMedia extends StatelessWidget {
     final canLoadAsset = canLoadAssetImage(imageUrl);
     final isVideo = post.isVideo || (imageUrl?.endsWith('.mp4') ?? false);
 
-    final media = _buildSingleImage(imageUrl, fallback, canLoadAsset);
+    // A real picture is shown whole (portrait ones too) and opens full screen.
+    final media = isLocalPhoto(imageUrl) || isNetworkImage(imageUrl)
+        ? _WholePicture(
+            url: imageUrl!,
+            fallback: fallback,
+            onTap: playable
+                ? () => showImageGallery(context, [imageUrl])
+                : null,
+          )
+        : _buildSingleImage(imageUrl, fallback, canLoadAsset);
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(AppRadius.md),
@@ -249,11 +261,13 @@ class _MultiImageCarousel extends StatefulWidget {
   final Post post;
   final List<String> images;
   final Widget fallback;
+  final bool openable;
 
   const _MultiImageCarousel({
     required this.post,
     required this.images,
     required this.fallback,
+    required this.openable,
   });
 
   @override
@@ -272,17 +286,27 @@ class _MultiImageCarouselState extends State<_MultiImageCarousel> {
         alignment: Alignment.bottomCenter,
         children: [
           SizedBox(
-            height: 240,
+            height: 360,
             child: PageView.builder(
               itemCount: images.length,
               onPageChanged: (index) => setState(() => _currentIndex = index),
               itemBuilder: (context, index) {
                 final url = images[index];
-                return PostMedia._buildSingleImage(
-                  url,
-                  widget.fallback,
-                  canLoadAssetImage(url),
-                );
+                final real = isLocalPhoto(url) || isNetworkImage(url);
+                return real
+                    ? _WholePicture(
+                        url: url,
+                        fallback: widget.fallback,
+                        fillHeight: true,
+                        onTap: widget.openable
+                            ? () => showImageGallery(context, images, index)
+                            : null,
+                      )
+                    : PostMedia._buildSingleImage(
+                        url,
+                        widget.fallback,
+                        canLoadAssetImage(url),
+                      );
               },
             ),
           ),
@@ -329,5 +353,58 @@ class _MultiImageCarouselState extends State<_MultiImageCarousel> {
         ],
       ),
     );
+  }
+}
+
+/// A picture shown whole: the full width when it is wide, the full height
+/// (up to [maxHeight]) when it is tall, never cropped. [fillHeight] is for a
+/// page of the carousel, which has a fixed height.
+class _WholePicture extends StatelessWidget {
+  final String url;
+  final Widget fallback;
+  final VoidCallback? onTap;
+  final bool fillHeight;
+
+  static const double maxHeight = 520;
+
+  const _WholePicture({
+    required this.url,
+    required this.fallback,
+    this.onTap,
+    this.fillHeight = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final image = isLocalPhoto(url)
+        ? Image.file(
+            File(url),
+            fit: BoxFit.contain,
+            errorBuilder: (context, error, stackTrace) => fallback,
+          )
+        : Image.network(
+            url,
+            fit: BoxFit.contain,
+            errorBuilder: (context, error, stackTrace) => fallback,
+          );
+    final box = ColoredBox(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      child: fillHeight
+          ? SizedBox.expand(child: image)
+          : ConstrainedBox(
+              constraints: const BoxConstraints(
+                minHeight: 160,
+                maxHeight: maxHeight,
+              ),
+              child: SizedBox(width: double.infinity, child: image),
+            ),
+    );
+    return onTap == null
+        ? box
+        : GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onTap,
+            child: box,
+          );
   }
 }

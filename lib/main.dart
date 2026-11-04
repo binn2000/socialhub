@@ -792,6 +792,20 @@ class _MainScreenState extends State<MainScreen> {
     });
   }
 
+  void _handleAddPhotosPost(
+    String text,
+    String feeling,
+    String privacy,
+    List<String> photoPaths,
+  ) => _handleAddPost(
+    text,
+    feeling,
+    privacy,
+    photoPaths.first,
+    null,
+    photoPaths: photoPaths,
+  );
+
   void _handleAddVideoPost(
     String text,
     String feeling,
@@ -806,12 +820,14 @@ class _MainScreenState extends State<MainScreen> {
     String? imageUrl,
     String? imageId, {
     String? videoPath,
+    List<String> photoPaths = const [],
   }) {
     final draft = Post(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       author: _currentUser,
       content: text,
       imageUrl: imageUrl,
+      imageUrls: photoPaths,
       imageId: imageId,
       feeling: feeling,
       privacy: privacy,
@@ -2065,6 +2081,7 @@ class _MainScreenState extends State<MainScreen> {
         onPickPhoto: widget.api.isRemote ? _pickPhoto : null,
         onPickVideo: widget.api.isRemote ? _pickVideo : null,
         onVideoPostCreated: widget.api.isRemote ? _handleAddVideoPost : null,
+        onPhotosPostCreated: widget.api.isRemote ? _handleAddPhotosPost : null,
       ),
       NotificationsScreen(
         notifications: _notifications,

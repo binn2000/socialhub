@@ -35,6 +35,16 @@ class CreatePostScreen extends StatefulWidget {
   )?
   onVideoPostCreated;
 
+  /// Sends a post with all its picked photos (server only; without it only
+  /// the first photo goes through [onPostCreated]).
+  final void Function(
+    String text,
+    String feeling,
+    String privacy,
+    List<String> photoPaths,
+  )?
+  onPhotosPostCreated;
+
   /// Whether a post is currently being uploaded to the server.
   final bool isSubmitting;
 
@@ -45,6 +55,7 @@ class CreatePostScreen extends StatefulWidget {
     this.onPickPhoto,
     this.onPickVideo,
     this.onVideoPostCreated,
+    this.onPhotosPostCreated,
     this.isSubmitting = false,
   });
 
@@ -187,6 +198,16 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
         _selectedFeeling,
         _selectedPrivacy,
         _videoPath!,
+      );
+      _resetForm(statusMessage: 'Đã đăng bài viết thành công');
+      return;
+    }
+    if (_photoPaths.isNotEmpty && widget.onPhotosPostCreated != null) {
+      widget.onPhotosPostCreated!(
+        text,
+        _selectedFeeling,
+        _selectedPrivacy,
+        List.of(_photoPaths),
       );
       _resetForm(statusMessage: 'Đã đăng bài viết thành công');
       return;

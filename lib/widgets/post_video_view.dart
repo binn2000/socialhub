@@ -16,7 +16,7 @@ class PostVideoView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ratio = (video.width != null && video.height != null)
-        ? (video.width! / video.height!).clamp(0.6, 1.8)
+        ? (video.width! / video.height!).clamp(0.625, 1.8)
         : 16 / 9;
 
     return AspectRatio(
@@ -64,7 +64,7 @@ class PostVideoView extends StatelessWidget {
         if (video.thumbnailUrl != null)
           Image.network(
             video.thumbnailUrl!,
-            fit: BoxFit.cover,
+            fit: BoxFit.contain,
             errorBuilder: (context, error, stackTrace) => const SizedBox(),
           ),
         Center(

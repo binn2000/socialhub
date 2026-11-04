@@ -17,6 +17,7 @@ import 'package:flutter_learning/models/story.dart';
 import 'package:flutter_learning/models/user.dart';
 import 'package:flutter_learning/models/user_note.dart';
 import 'package:flutter_learning/models/user_profile.dart';
+import 'package:flutter_learning/widgets/post_video_view.dart';
 import 'package:flutter_learning/widgets/video_draft_preview.dart';
 import 'package:flutter_learning/services/video_compressor.dart';
 import 'package:flutter_learning/services/audio_preview.dart';
@@ -977,6 +978,89 @@ void main() {
       width: 720,
       height: 1280,
     );
+
+    testWidgets('every picked photo is sent, not only the first', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me);
+      var picked = 0;
+      await _pump(tester, api, pickPhoto: () async => '/p/${++picked}.jpg');
+
+      await tapTab(tester, createTab);
+      await tester.tap(find.text('Chọn ảnh'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('Đổi ảnh'));
+      await tester.tap(find.text('Đổi ảnh')); // picks a second photo
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Đăng'));
+      await tester.pumpAndSettle();
+
+      final draft = api.createdPosts.single;
+      expect(draft.imageUrls, ['/p/1.jpg', '/p/2.jpg']);
+      expect(draft.imageUrl, '/p/1.jpg');
+    });
+
+    testWidgets('a picture in the feed opens full screen when tapped', (
+      tester,
+    ) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(800, 3000);
+      addTearDown(tester.view.reset);
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..extraPosts.add(
+          Post(
+            id: 'img1',
+            author: _lan,
+            content: 'Ảnh dọc',
+            imageUrl: 'http://localhost/storage/a.jpg',
+            imageUrls: const [
+              'http://localhost/storage/a.jpg',
+              'http://localhost/storage/b.jpg',
+            ],
+            createdAt: '1 giờ trước',
+            likes: 0,
+            comments: 0,
+            shares: 0,
+            isLiked: false,
+          ),
+        );
+      await _pump(tester, api);
+
+      expect(find.text('1/2'), findsOneWidget);
+      await tester.tap(find.byType(PageView).first);
+      await tester.pumpAndSettle();
+
+      expect(find.byTooltip('Đóng ảnh'), findsOneWidget);
+      expect(find.text('1/2'), findsWidgets);
+      await tester.tap(find.byTooltip('Đóng ảnh'));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Đóng ảnh'), findsNothing);
+    });
+
+    testWidgets('a tall video keeps its shape instead of being cropped', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: PostVideoView(
+              video: PostVideo(
+                status: 'ready',
+                url: 'http://localhost/v.mp4',
+                width: 720,
+                height: 1280,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      final ratio = tester.widget<AspectRatio>(find.byType(AspectRatio));
+      expect(
+        ratio.aspectRatio,
+        0.625,
+      ); // 9:16 limited a little, then letterboxed
+    });
 
     testWidgets('Create Post picks a video and sends its path', (tester) async {
       final api = _FakeRemoteApi(sessionUser: _me);
