@@ -44,21 +44,29 @@ import 'package:flutter_learning/theme/app_theme.dart';
 import 'package:flutter_learning/widgets/bottom_nav.dart';
 import 'package:flutter_learning/widgets/follow_list_sheet.dart';
 
-/// Set with `--dart-define=API_BASE_URL=http://localhost:8000/api/v1` to use
-/// the Laravel backend. Without it the app runs on the offline mock data.
-const _apiBaseUrl = String.fromEnvironment('API_BASE_URL');
+/// The server the app talks to. Builds use the test server by default, so a
+/// plain `flutter build apk` can no longer produce the offline mock app by
+/// mistake; override it with `--dart-define=API_BASE_URL=...`.
+const _apiBaseUrl = String.fromEnvironment(
+  'API_BASE_URL',
+  defaultValue: 'https://imminent-ninetieth-stark.ngrok-free.dev/api/v1',
+);
+
+/// `--dart-define=USE_MOCK=true` runs the offline mock data on purpose.
+const _useMock = bool.fromEnvironment('USE_MOCK');
 
 void main() {
+  final useServer = !_useMock && _apiBaseUrl.isNotEmpty;
   runApp(
     SocialHubApp(
-      api: _apiBaseUrl.isEmpty
-          ? null
-          : HttpSocialApi(
+      api: useServer
+          ? HttpSocialApi(
               baseUrl: _apiBaseUrl,
               tokenStore: const SecureTokenStore(),
-            ),
-      push: _apiBaseUrl.isEmpty ? null : FirebasePushService(),
-      audio: _apiBaseUrl.isEmpty ? null : JustAudioPreview(),
+            )
+          : null,
+      push: useServer ? FirebasePushService() : null,
+      audio: useServer ? JustAudioPreview() : null,
     ),
   );
 }
