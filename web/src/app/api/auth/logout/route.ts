@@ -13,6 +13,8 @@ export async function POST() {
         headers: {
           Accept: "application/json",
           Authorization: `Bearer ${token}`,
+          // Without this ngrok answers with its HTML warning page and the token is never revoked.
+          "ngrok-skip-browser-warning": "true",
         },
       });
     } catch {

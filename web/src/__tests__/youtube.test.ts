@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { formatDuration, isYoutubeId, youtubeEmbedUrl } from "@/lib/youtube";
+import {
+  formatDuration,
+  isYoutubeId,
+  youtubeEmbedUrl,
+  youtubeWatchUrl,
+  YOUTUBE_CATEGORIES,
+} from "@/lib/youtube";
 
 describe("youtube helpers", () => {
   it("only accepts real 11-character ids and builds the privacy-enhanced embed url", () => {
@@ -13,6 +19,10 @@ describe("youtube helpers", () => {
     // A url or script smuggled in as an id never becomes an iframe source.
     expect(youtubeEmbedUrl("javascript:alert(1)")).toBeNull();
     expect(youtubeEmbedUrl("../../evil")).toBeNull();
+    expect(youtubeWatchUrl("dQw4w9WgXcQ")).toBe(
+      "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    );
+    expect(YOUTUBE_CATEGORIES.length).toBeGreaterThan(5);
   });
 
   it("formats durations", () => {

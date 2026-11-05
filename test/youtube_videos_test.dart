@@ -132,5 +132,38 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Đã được'), findsOneWidget);
     });
+
+    testWidgets('the topic chips use the same words as the web', (
+      tester,
+    ) async {
+      // The server caches a search by its words: a different spelling in the
+      // app would cost YouTube quota a second time.
+      await pumpExplore(tester);
+      await tester.tap(find.text('Video'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('🎬 Phim & Trailer'));
+      await tester.pumpAndSettle();
+      expect(searches.last, 'review phim trailer|-');
+
+      await tester.ensureVisible(find.text('📚 Học tập'));
+      await tester.tap(find.text('📚 Học tập'));
+      await tester.pumpAndSettle();
+      expect(searches.last, 'kiến thức thú vị|-');
+    });
+
+    testWidgets('selecting a category chip searches that topic', (
+      tester,
+    ) async {
+      await pumpExplore(tester);
+      await tester.tap(find.text('Video'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('🎵 Âm nhạc'));
+      await tester.pumpAndSettle();
+
+      expect(searches.last, 'nhạc việt mới nhất|-');
+      expect(find.text('Kết quả nhạc việt mới nhất'), findsOneWidget);
+    });
   });
 }

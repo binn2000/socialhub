@@ -795,7 +795,7 @@ paths:
         embedded, 20 per page, and plays them with YouTube's own embedded player in the clients (nothing is
         downloaded or re-hosted). Without `q` it lists the most popular videos of the configured country
         (`YOUTUBE_REGION`, default `VN`). `cursor` is the `nextCursor` of the previous page. Answers are cached for
-        an hour and the route is limited to 20 per minute, because YouTube's free quota is small (a search costs
+        six hours and the route is limited to 20 per minute, because YouTube's free quota is small (a search costs
         100 of the 10,000 daily units). `503` with `code: video_unavailable` when YouTube cannot be reached, the key
         is missing or the daily quota is used up.
       parameters:

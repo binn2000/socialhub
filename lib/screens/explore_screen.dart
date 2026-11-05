@@ -221,7 +221,10 @@ class _ExploreScreenState extends State<ExploreScreen> {
     );
   }
 
-  void _playVideo(YoutubeVideo video) {
+  void _playVideo(
+    YoutubeVideo video, [
+    List<YoutubeVideo> playlist = const [],
+  ]) {
     if (widget.onPlayVideo != null) {
       widget.onPlayVideo!(video);
       return;
@@ -229,7 +232,11 @@ class _ExploreScreenState extends State<ExploreScreen> {
     Navigator.push(
       context,
       MaterialPageRoute<void>(
-        builder: (_) => YoutubePlayerScreen(video: video),
+        builder: (_) => YoutubePlayerScreen(
+          video: video,
+          relatedVideos: playlist,
+          onOpenMessages: widget.onOpenMessages,
+        ),
       ),
     );
   }
@@ -269,6 +276,8 @@ class _ExploreScreenState extends State<ExploreScreen> {
               child: YoutubeVideosView(
                 search: widget.searchVideos!,
                 onPlay: _playVideo,
+                onPlayWithPlaylist: _playVideo,
+                onOpenMessages: widget.onOpenMessages,
               ),
             ),
           ],

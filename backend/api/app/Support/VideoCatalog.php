@@ -11,11 +11,14 @@ use Illuminate\Support\Facades\Http;
  * are passed on: the clients play it with YouTube's own embedded player, nothing is downloaded.
  *
  * Quota (free tier, 10,000 units a day): a search costs 100 units, listing details or the most popular
- * videos 1 unit, so every answer is cached for an hour and the route is rate limited.
+ * videos 1 unit, so every answer is cached for six hours (topics and popular lists hardly change faster) and the route is rate limited.
  */
 class VideoCatalog
 {
     private const API = 'https://www.googleapis.com/youtube/v3';
+
+    /** 100 units a search against 10,000 a day: the same topic chip pressed by anyone costs nothing for six hours. */
+    private const CACHE_SECONDS = 21600;
 
     /** A YouTube video id is exactly 11 URL-safe characters. */
     public static function isVideoId(string $id): bool
@@ -32,7 +35,7 @@ class VideoCatalog
     {
         $query = trim($query);
 
-        return Cache::remember('video:'.md5(mb_strtolower($query).'|'.$cursor), 3600, function () use ($query, $cursor) {
+        return Cache::remember('video:'.md5(mb_strtolower($query).'|'.$cursor), self::CACHE_SECONDS, function () use ($query, $cursor) {
             if ($query === '') {
                 // No search words: what is popular in the configured country (1 quota unit instead of 100).
                 $body = self::call('/videos', [

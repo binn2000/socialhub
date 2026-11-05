@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import { createPortal } from "react-dom";
 import { AlertTriangle, LogOut, Trash2, UserMinus, UserX, Info } from "lucide-react";
 
 export type ConfirmVariant = "danger" | "warning" | "primary" | "neutral";
@@ -97,9 +98,12 @@ export function ConfirmModal({
     }
   };
 
-  return (
+  // Rendered in <body>: inside the sticky header (backdrop-blur) a `fixed`
+  // element is positioned against the header, so the dialog was squeezed into
+  // the 64px bar and hidden behind other layers.
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in"
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in"
       onClick={(e) => {
         if (e.target === e.currentTarget && !loading) onClose();
       }}
@@ -149,6 +153,7 @@ export function ConfirmModal({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
