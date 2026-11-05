@@ -1451,10 +1451,17 @@ paths:
       description: |
         **Authentication:** required. **Authorization:** the caller must be able to see the post (else `404`).
         **Idempotent:** liking twice keeps one like. The response is the **authoritative state**, so the client can
-        replace its optimistic value. Creates a `like` notification for the author (not for self-likes; at most one
+        replace its optimistic value. The optional JSON body `{"reaction": "love"}` chooses one of `like` (default),
+        `love`, `haha`, `wow`, `sad`, `angry`: a new reaction on an already liked post replaces the old one and the
+        count stays; without a body an existing reaction is kept. Creates a `like` notification for the author (not for self-likes; at most one
         per person and post, even if they like/unlike repeatedly).
       parameters:
         - {$ref: '#/components/parameters/PostId'}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LikeRequest'}
       responses:
         '200':
           description: Current like state.
@@ -2476,7 +2483,7 @@ components:
       x-backend-entity: posts
       x-not-exposed:
         - "imageId (mock image identity; replaced by the uploaded image)"
-      required: [id, author, content, imageUrl, imageUrls, video, feeling, privacy, createdAt, likes, comments, shares, isLiked, isSaved, isHidden]
+      required: [id, author, content, imageUrl, imageUrls, video, feeling, privacy, createdAt, likes, comments, shares, isLiked, myReaction, reactionCounts, isSaved, isHidden]
       properties:
         id: {$ref: '#/components/schemas/Id'}
         author: {$ref: '#/components/schemas/UserSummary'}
@@ -2502,6 +2509,15 @@ components:
         comments: {type: integer, minimum: 0}
         shares: {type: integer, minimum: 0}
         isLiked: {type: boolean, x-computed: the caller has a like on this post}
+        myReaction:
+          anyOf:
+            - $ref: '#/components/schemas/ReactionType'
+            - type: 'null'
+          description: 'The caller''s reaction (`like` for a plain Thích), `null` when not liked.'
+        reactionCounts:
+          type: object
+          additionalProperties: {type: integer, minimum: 1}
+          description: 'People per reaction; `likes` is their sum.'
         isSaved: {type: boolean, x-computed: the caller saved this post}
         isHidden: {type: boolean, x-computed: the caller hid this post from their feed}
       example:
@@ -2553,12 +2569,29 @@ components:
             - $ref: '#/components/schemas/Feeling'
             - type: 'null'
         privacy: {$ref: '#/components/schemas/Privacy'}
+    ReactionType:
+      type: string
+      enum: [like, love, haha, wow, sad, angry]
+      description: 'Thích, Yêu thích, Haha, Wow, Buồn, Phẫn nộ. `like` is the plain Thích.'
+    LikeRequest:
+      type: object
+      properties:
+        reaction: {$ref: '#/components/schemas/ReactionType'}
     LikeState:
       type: object
-      required: [isLiked, likes]
+      required: [isLiked, likes, reaction, reactionCounts]
       properties:
         isLiked: {type: boolean}
         likes: {type: integer, minimum: 0}
+        reaction:
+          anyOf:
+            - $ref: '#/components/schemas/ReactionType'
+            - type: 'null'
+          description: 'The caller''s reaction, `null` when not liked.'
+        reactionCounts:
+          type: object
+          additionalProperties: {type: integer, minimum: 1}
+          description: 'People per reaction (only the reactions somebody used), for example `{"love": 2, "sad": 1}`.'
     SaveState:
       type: object
       required: [isSaved]
@@ -3017,6 +3050,7 @@ x-database:
       columns:
         - {name: post_id, type: "char(26)", nullable: false, references: posts.id, onDelete: cascade}
         - {name: user_id, type: "char(26)", nullable: false, references: users.id, onDelete: cascade}
+        - {name: reaction, type: "varchar(8)", nullable: false, default: like, note: "like | love | haha | wow | sad | angry"}
         - {name: created_at, type: timestamp, nullable: true}
       primaryKey: [post_id, user_id]
       notes:

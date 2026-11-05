@@ -23,6 +23,9 @@ class HomeScreen extends StatefulWidget {
   final List<Story> stories;
   final Set<String> savedPostIds;
   final Function(String) onToggleLike;
+
+  /// Chooses a reaction for a post (server only; null keeps the local one).
+  final void Function(String postId, String reaction)? onReact;
   final ValueChanged<String> onToggleSave;
   final ValueChanged<String> onHidePost;
   final ValueChanged<String> onUndoHidePost;
@@ -80,6 +83,7 @@ class HomeScreen extends StatefulWidget {
     required this.stories,
     required this.savedPostIds,
     required this.onToggleLike,
+    this.onReact,
     required this.onToggleSave,
     required this.onHidePost,
     required this.onUndoHidePost,
@@ -757,6 +761,9 @@ class _HomeScreenState extends State<HomeScreen> {
             child: PostActionBar(
               post: post,
               onLike: () => widget.onToggleLike(post.id),
+              onReactionSelected: widget.onReact == null
+                  ? null
+                  : (reaction) => widget.onReact!(post.id, reaction.key),
               onComment: () => _showComments(context, post),
               onShare: () => _sharePost(context, post),
               isSaved: isSaved,

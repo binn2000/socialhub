@@ -166,11 +166,11 @@ class PostsTest extends TestCase
         $post = $this->makePost($author);
         $this->actingAs($me, 'sanctum');
 
-        $this->putJson("/api/v1/posts/{$post->id}/like")->assertOk()->assertExactJson(['data' => ['isLiked' => true, 'likes' => 1]]);
+        $this->putJson("/api/v1/posts/{$post->id}/like")->assertOk()->assertExactJson(['data' => ['isLiked' => true, 'likes' => 1, 'reaction' => 'like', 'reactionCounts' => ['like' => 1]]]);
         $this->putJson("/api/v1/posts/{$post->id}/like")->assertOk()->assertJsonPath('data.likes', 1);
         $this->getJson("/api/v1/posts/{$post->id}")->assertJsonPath('data.isLiked', true);
 
-        $this->deleteJson("/api/v1/posts/{$post->id}/like")->assertOk()->assertExactJson(['data' => ['isLiked' => false, 'likes' => 0]]);
+        $this->deleteJson("/api/v1/posts/{$post->id}/like")->assertOk()->assertExactJson(['data' => ['isLiked' => false, 'likes' => 0, 'reaction' => null, 'reactionCounts' => []]]);
         $this->deleteJson("/api/v1/posts/{$post->id}/like")->assertOk()->assertJsonPath('data.likes', 0);
     }
 

@@ -34,6 +34,11 @@ class PostPresenter
         $liked = $flag('post_likes');
         $saved = $flag('post_saves');
         $hidden = $flag('post_hidden');
+        $reactions = DB::table('post_likes')->whereIn('post_id', $ids)
+            ->groupBy('post_id', 'reaction')->selectRaw('post_id, reaction, count(*) as total')->get()
+            ->groupBy('post_id');
+        $mine = DB::table('post_likes')->where('user_id', $viewer->id)->whereIn('post_id', $ids)
+            ->pluck('reaction', 'post_id');
         $images = DB::table('post_images')->whereIn('post_id', $ids)->orderBy('position')->orderBy('id')->get()
             ->groupBy('post_id');
 
@@ -58,6 +63,9 @@ class PostPresenter
             'comments' => $p->comments_count,
             'shares' => $p->shares_count,
             'isLiked' => $liked->has($p->id),
+            'myReaction' => $mine[$p->id] ?? null,
+            'reactionCounts' => (object) ($reactions[$p->id] ?? collect())
+                ->pluck('total', 'reaction')->map(fn ($n) => (int) $n)->all(),
             'isSaved' => $saved->has($p->id),
             'isHidden' => $hidden->has($p->id),
         ])->all();

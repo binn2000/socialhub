@@ -946,11 +946,29 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   void _setLiked(String postId, bool liked) {
+    final post = _posts.firstWhere((post) => post.id == postId);
+    if (post.isLiked == liked) return;
+    _applyReaction(postId, liked ? 'like' : null);
+  }
+
+  /// My reaction on a post (null: none) with the counters that go with it.
+  void _applyReaction(String postId, String? reaction) {
     _posts = _posts.map((post) {
-      if (post.id != postId || post.isLiked == liked) return post;
+      if (post.id != postId) return post;
+      final counts = {...post.reactionCounts};
+      final before = post.isLiked ? (post.reaction ?? 'like') : null;
+      if (before != null) {
+        final left = (counts[before] ?? 1) - 1;
+        left <= 0 ? counts.remove(before) : counts[before] = left;
+      }
+      if (reaction != null) counts[reaction] = (counts[reaction] ?? 0) + 1;
+      final change = (reaction != null ? 1 : 0) - (before != null ? 1 : 0);
       return post.copyWith(
-        likes: liked ? post.likes + 1 : post.likes - 1,
-        isLiked: liked,
+        isLiked: reaction != null,
+        likes: post.likes + change,
+        reaction: reaction,
+        clearReaction: reaction == null,
+        reactionCounts: counts,
       );
     }).toList();
   }
@@ -962,6 +980,21 @@ class _MainScreenState extends State<MainScreen> {
     _sync(
       () => widget.api.setLiked(postId, liked),
       rollback: () => _setLiked(postId, !liked),
+    );
+  }
+
+  /// Chooses one of the six reactions; choosing the one already there removes it.
+  void _handleReaction(String postId, String reaction) {
+    final post = _posts.firstWhere((post) => post.id == postId);
+    final before = post.isLiked ? (post.reaction ?? 'like') : null;
+    if (before == reaction) {
+      _handleToggleLike(postId);
+      return;
+    }
+    setState(() => _applyReaction(postId, reaction));
+    _sync(
+      () => widget.api.setLiked(postId, true, reaction: reaction),
+      rollback: () => _applyReaction(postId, before),
     );
   }
 
@@ -2115,6 +2148,7 @@ class _MainScreenState extends State<MainScreen> {
         stories: _stories,
         savedPostIds: _savedPostIds,
         onToggleLike: _handleToggleLike,
+        onReact: widget.api.isRemote ? _handleReaction : null,
         onToggleSave: _handleToggleSave,
         onHidePost: _handleHidePost,
         onUndoHidePost: _handleUnhidePost,

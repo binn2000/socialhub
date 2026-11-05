@@ -104,6 +104,43 @@ void main() {
     expect(user.avatarUrl, 'http://10.0.2.2:8000/storage/a.png');
   });
 
+  test('a post carries my reaction and how many people used each one', () {
+    final post = postFromJson({
+      'id': 'p1',
+      'author': _author(),
+      'content': 'Xin chào',
+      'imageUrl': null,
+      'privacy': 'public',
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+      'likes': 3,
+      'comments': 0,
+      'shares': 0,
+      'isLiked': true,
+      'myReaction': 'love',
+      'reactionCounts': {'love': 2, 'sad': 1},
+    });
+
+    expect(post.reaction, 'love');
+    expect(post.reactionCounts, {'love': 2, 'sad': 1});
+
+    final plain = postFromJson({
+      'id': 'p2',
+      'author': _author(),
+      'content': 'Không ai thả',
+      'imageUrl': null,
+      'privacy': 'public',
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+      'likes': 0,
+      'comments': 0,
+      'shares': 0,
+      'isLiked': false,
+      'myReaction': null,
+      'reactionCounts': <String, dynamic>{},
+    });
+    expect(plain.reaction, isNull);
+    expect(plain.reactionCounts, isEmpty);
+  });
+
   test('a post gets Vietnamese labels for privacy and feeling', () {
     final post = postFromJson({
       'id': 'p1',

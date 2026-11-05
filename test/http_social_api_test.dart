@@ -762,6 +762,25 @@ void main() {
     expect(adapter.requests.map((r) => r.method), ['PUT', 'DELETE']);
   });
 
+  test('a reaction is sent in the body of the like request', () async {
+    adapter.routes['PUT /posts/p1/like'] = (
+      200,
+      {
+        'data': {
+          'isLiked': true,
+          'likes': 1,
+          'reaction': 'love',
+          'reactionCounts': {'love': 1},
+        },
+      },
+    );
+    await _signedInUser(api, adapter, tokens);
+
+    await api.setLiked('p1', true, reaction: 'love');
+
+    expect(adapter.last('PUT /posts/p1/like').data, {'reaction': 'love'});
+  });
+
   test(
     'messages are returned oldest first and sending maps the reply',
     () async {

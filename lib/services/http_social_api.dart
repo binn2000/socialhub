@@ -595,8 +595,12 @@ class HttpSocialApi extends SocialApi {
   ];
 
   @override
-  Future<void> setLiked(String postId, bool liked) async {
-    await _request(liked ? 'PUT' : 'DELETE', '/posts/$postId/like');
+  Future<void> setLiked(String postId, bool liked, {String? reaction}) async {
+    await _request(
+      liked ? 'PUT' : 'DELETE',
+      '/posts/$postId/like',
+      data: liked && reaction != null ? {'reaction': reaction} : null,
+    );
   }
 
   @override

@@ -15,6 +15,11 @@ class Post {
   final int comments;
   final int shares;
   final bool isLiked;
+
+  /// My reaction (`like`, `love`, `haha`, `wow`, `sad`, `angry`), null when
+  /// not liked, and how many people used each one (server only).
+  final String? reaction;
+  final Map<String, int> reactionCounts;
   final bool isVideo;
   final String? videoDuration;
 
@@ -35,6 +40,8 @@ class Post {
     required this.comments,
     required this.shares,
     required this.isLiked,
+    this.reaction,
+    this.reactionCounts = const {},
     this.isVideo = false,
     this.videoDuration,
     this.video,
@@ -61,6 +68,9 @@ class Post {
     int? comments,
     int? shares,
     bool? isLiked,
+    String? reaction,
+    bool clearReaction = false,
+    Map<String, int>? reactionCounts,
     String? privacy,
     List<String>? imageUrls,
     PostVideo? video,
@@ -79,6 +89,8 @@ class Post {
       comments: comments ?? this.comments,
       shares: shares ?? this.shares,
       isLiked: isLiked ?? this.isLiked,
+      reaction: clearReaction ? null : (reaction ?? this.reaction),
+      reactionCounts: reactionCounts ?? this.reactionCounts,
       isVideo: isVideo,
       videoDuration: videoDuration,
       video: video ?? this.video,

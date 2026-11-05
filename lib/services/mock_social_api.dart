@@ -168,7 +168,7 @@ class MockSocialApi extends SocialApi {
   Future<List<Post>> loadSavedPosts() async => const [];
 
   @override
-  Future<void> setLiked(String postId, bool liked) async {}
+  Future<void> setLiked(String postId, bool liked, {String? reaction}) async {}
 
   @override
   Future<void> setSaved(String postId, bool saved) async {}

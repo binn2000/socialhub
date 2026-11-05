@@ -170,6 +170,12 @@ Post postFromJson(Json json, {String Function(String)? absoluteUrl}) {
     comments: json['comments'] as int,
     shares: json['shares'] as int,
     isLiked: json['isLiked'] as bool,
+    reaction: json['myReaction'] as String?,
+    reactionCounts: {
+      for (final entry
+          in ((json['reactionCounts'] as Json?) ?? const {}).entries)
+        entry.key: entry.value as int,
+    },
   );
 }
 

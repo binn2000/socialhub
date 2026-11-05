@@ -505,7 +505,10 @@ class _PostActionBarState extends State<PostActionBar> {
                 onSelect: (reaction) {
                   _closeMenu();
                   setState(() => _currentReaction = reaction);
-                  if (!widget.post.isLiked) {
+                  // With onReactionSelected the owner likes the post itself
+                  // (and stores the reaction); alone, the bar likes it.
+                  if (!widget.post.isLiked &&
+                      widget.onReactionSelected == null) {
                     widget.onLike?.call();
                   }
                   widget.onReactionSelected?.call(reaction);
@@ -535,11 +538,11 @@ class _PostActionBarState extends State<PostActionBar> {
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
     final isLiked = widget.post.isLiked;
-    final hasCustomReaction = isLiked && _currentReaction != null;
+    // The server's reaction wins over what this widget remembers.
+    final shown = findPostReaction(widget.post.reaction) ?? _currentReaction;
+    final hasCustomReaction = isLiked && shown != null && shown.key != 'like';
 
-    final Color likeColor = hasCustomReaction
-        ? _currentReaction!.color
-        : palette.like;
+    final Color likeColor = hasCustomReaction ? shown.color : palette.like;
 
     return Builder(
       builder: (btnContext) {
@@ -555,10 +558,7 @@ class _PostActionBarState extends State<PostActionBar> {
                         ? Icons.favorite_rounded
                         : Icons.favorite_border_rounded),
               customWidget: hasCustomReaction
-                  ? Text(
-                      _currentReaction!.emoji,
-                      style: const TextStyle(fontSize: 18),
-                    )
+                  ? Text(shown.emoji, style: const TextStyle(fontSize: 18))
                   : null,
               count: widget.post.likes,
               color: isLiked ? likeColor : null,

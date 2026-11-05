@@ -279,7 +279,7 @@ abstract class SocialApi {
   /// The posts the current user saved, most recently saved first.
   Future<List<Post>> loadSavedPosts();
 
-  Future<void> setLiked(String postId, bool liked);
+  Future<void> setLiked(String postId, bool liked, {String? reaction});
   Future<void> setSaved(String postId, bool saved);
   Future<void> setHidden(String postId, bool hidden);
   Future<void> sendFriendRequest(String userId);

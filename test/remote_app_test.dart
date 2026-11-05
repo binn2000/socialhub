@@ -91,6 +91,7 @@ class _FakeRemoteApi extends SocialApi {
   final loginCalls = <String>[];
   final registerCalls = <String>[];
   final likes = <String, bool>{};
+  final reactions = <String, String?>{};
   final createdPosts = <Post>[];
   final createdStories = <Story>[];
   final friendRequests = <String>[];
@@ -365,7 +366,8 @@ class _FakeRemoteApi extends SocialApi {
   Future<UserModel> setShowOnlineStatus(bool enabled) async => _me;
 
   @override
-  Future<void> setLiked(String postId, bool liked) async {
+  Future<void> setLiked(String postId, bool liked, {String? reaction}) async {
+    reactions[postId] = reaction;
     if (likeError != null) throw likeError!;
     likes[postId] = liked;
   }
@@ -956,6 +958,58 @@ void main() {
 
       expect(find.text('Mật khẩu cần ít nhất 8 ký tự'), findsOneWidget);
       expect(find.text('Từ 3 đến 30 ký tự: chữ, số hoặc _'), findsOneWidget);
+    });
+  });
+
+  group('post reactions', () {
+    testWidgets('a reaction is sent to the server and counted once', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me);
+      await _pump(tester, api);
+
+      await tester.longPress(find.byIcon(Icons.favorite_border_rounded).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('❤️'));
+      await tester.pumpAndSettle();
+
+      expect(api.reactions, {'p1': 'love'});
+      expect(api.likes, {'p1': true});
+      expect(find.text('4'), findsOneWidget); // 3 likes + mine
+
+      // A different reaction replaces it without another like.
+      await tester.longPress(find.text('❤️').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('😆'));
+      await tester.pumpAndSettle();
+      expect(api.reactions['p1'], 'haha');
+      expect(find.text('4'), findsOneWidget);
+
+      // Choosing the same one again takes it back.
+      await tester.longPress(find.text('😆').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('😆').last);
+      await tester.pumpAndSettle();
+      expect(api.likes, {'p1': false});
+      expect(find.text('3'), findsWidgets);
+    });
+
+    testWidgets('a refused reaction is taken back', (tester) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..likeError = const ApiException(
+          statusCode: 429,
+          code: 'too_many',
+          message: 'Bạn thao tác quá nhanh, hãy thử lại sau.',
+        );
+      await _pump(tester, api);
+
+      await tester.longPress(find.byIcon(Icons.favorite_border_rounded).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('😮'));
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.favorite_border_rounded), findsWidgets);
+      expect(find.text('😮'), findsNothing);
     });
   });
 
