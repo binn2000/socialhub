@@ -21,6 +21,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 class ConversationController extends Controller
@@ -212,6 +213,7 @@ class ConversationController extends Controller
             'partnerLastDeliveredMessageId' => $partner?->last_delivered_message_id,
             'partnerLastReadMessageId' => $partner?->last_read_message_id,
             'pinnedMessage' => $this->pinnedFor($c, $me),
+            'theme' => $c->theme ?? self::DEFAULT_THEME,
         ];
     }
 
@@ -251,6 +253,78 @@ class ConversationController extends Controller
         DB::table('conversations')->where('id', $c->id)->update(['pinned_message_id' => null]);
 
         return ['data' => ['pinnedMessage' => null]];
+    }
+
+    /** Bubble themes both people see; the colours live in the clients. */
+    public const THEMES = ['blue', 'purple', 'sunset', 'midnight', 'emerald'];
+
+    public const DEFAULT_THEME = 'blue';
+
+    public function setTheme(Request $request, string $conversation): array
+    {
+        $c = self::forParticipant($request, $conversation);
+        $data = $request->validate(['theme' => ['required', 'string', Rule::in(self::THEMES)]]);
+        DB::table('conversations')->where('id', $c->id)->update(['theme' => $data['theme']]);
+
+        return ['data' => ['theme' => $data['theme']]];
+    }
+
+    /**
+     * Every picture (type=image) or document (type=file) of the conversation, newest first, paged,
+     * without recalled messages or ones the caller deleted for themselves.
+     */
+    public function media(Request $request, string $conversation): array
+    {
+        $c = self::forParticipant($request, $conversation);
+        $request->validate([
+            'type' => ['required', 'in:image,file'],
+            'cursor' => ['nullable', 'string'],
+            'limit' => ['nullable', 'integer', 'min:1', 'max:100'],
+        ]);
+        $limit = (int) $request->query('limit', 30);
+        $scope = 'media|'.$c->id.'|'.$request->query('type');
+
+        $query = MessageAttachment::query()
+            ->join('messages', 'messages.id', '=', 'message_attachments.message_id')
+            ->where('messages.conversation_id', $c->id)
+            ->whereNull('messages.recalled_at')
+            ->whereNotExists(fn ($h) => $h->selectRaw('1')->from('message_hidden')
+                ->whereColumn('message_hidden.message_id', 'messages.id')->where('message_hidden.user_id', $request->user()->id))
+            ->when($request->query('type') === 'image',
+                fn ($q) => $q->where('message_attachments.type', 'image'),
+                fn ($q) => $q->where('message_attachments.type', '!=', 'image'))
+            ->select('message_attachments.*', 'messages.created_at as sent_at', 'messages.sender_id');
+
+        if ($request->filled('cursor')) {
+            [$at, $id] = Cursor::decode($request->query('cursor'), $scope) ?? Cursor::invalid();
+            $query->where(fn ($w) => $w->where('messages.created_at', '<', $at)
+                ->orWhere(fn ($t) => $t->where('messages.created_at', $at)->where('message_attachments.id', '<', $id)));
+        }
+
+        $rows = $query->orderByDesc('messages.created_at')->orderByDesc('message_attachments.id')->limit($limit + 1)->get();
+        $hasMore = $rows->count() > $limit;
+        $page = $rows->take($limit);
+        $last = $page->last();
+
+        return [
+            'data' => $page->map(fn ($a) => [
+                'id' => $a->id,
+                'messageId' => $a->message_id,
+                'senderId' => $a->sender_id,
+                'type' => $a->type,
+                'url' => ImageStore::url($a->path),
+                'name' => $a->name,
+                'mimeType' => $a->mime_type,
+                'sizeBytes' => $a->size_bytes,
+                'width' => $a->width,
+                'height' => $a->height,
+                'createdAt' => PostPresenter::timestamp(Carbon::parse($a->sent_at, 'UTC')),
+            ])->values()->all(),
+            'meta' => [
+                'nextCursor' => $hasMore ? Cursor::encode($scope, Carbon::parse($last->sent_at, 'UTC')->format(self::MS), $last->id) : null,
+                'hasMore' => $hasMore,
+            ],
+        ];
     }
 
     private const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp'];
@@ -600,6 +674,7 @@ class ConversationController extends Controller
                 'partnerLastDeliveredMessageId' => $partners[$c->id]->last_delivered_message_id ?? null,
                 'partnerLastReadMessageId' => $partners[$c->id]->last_read_message_id ?? null,
                 'pinnedMessage' => $this->pinnedFor($c, $me),
+                'theme' => $c->theme ?? self::DEFAULT_THEME,
                 'unreadCount' => (int) ($unread[$c->id] ?? 0),
                 'updatedAt' => PostPresenter::timestamp(Carbon::parse($c->last_message_at ?? $c->created_at, 'UTC')),
             ];

@@ -274,7 +274,7 @@ export function ViewNoteModal({
                 <button
                   type="button"
                   onClick={toggleTrackAudio}
-                  className="p-2 rounded-full bg-brand text-white shadow-xs hover:bg-brand-hover active:scale-95 transition"
+                  className="p-2 rounded-full bg-brand text-white shadow-sm hover:bg-brand-hover active:scale-95 transition"
                   title={isPlayingPreview ? "Tạm dừng" : "Nghe thử 30s"}
                 >
                   {isPlayingPreview ? <Pause size={14} /> : <Play size={14} className="ml-0.5" />}

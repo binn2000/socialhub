@@ -8,7 +8,8 @@ import 'package:flutter_learning/models/user.dart';
 import 'package:flutter_learning/models/user_note.dart';
 import 'package:flutter_learning/screens/chat_screen.dart';
 import 'package:flutter_learning/services/audio_preview.dart';
-import 'package:flutter_learning/services/social_api.dart' show ApiException;
+import 'package:flutter_learning/services/social_api.dart'
+    show ApiException, MediaPage;
 import 'package:flutter_learning/theme/app_tokens.dart';
 import 'package:flutter_learning/widgets/notes_row.dart';
 import 'package:flutter_learning/widgets/post_parts.dart';
@@ -49,6 +50,17 @@ class MessagesScreen extends StatefulWidget {
   /// Pins a message (null removes the pin), server only.
   final Future<void> Function(String conversationId, String? messageId)?
   onPinMessage;
+
+  /// Chooses the shared bubble theme and lists a conversation's pictures and
+  /// files (server only).
+  final Future<void> Function(String conversationId, String theme)?
+  onChangeTheme;
+  final Future<MediaPage> Function(
+    String conversationId, {
+    required bool images,
+    String? cursor,
+  })?
+  loadMedia;
 
   /// Searches conversations on the server by the other person's name or
   /// username, which also finds old ones that were not loaded. The results
@@ -92,6 +104,8 @@ class MessagesScreen extends StatefulWidget {
     this.onRecallMessage,
     this.onHideMessage,
     this.onPinMessage,
+    this.onChangeTheme,
+    this.loadMedia,
     this.onSearchConversations,
     this.notes,
     this.onSetNote,
@@ -495,6 +509,18 @@ class _MessagesScreenState extends State<MessagesScreen> {
                             onUnpinMessage: widget.onPinMessage == null
                                 ? null
                                 : () => widget.onPinMessage!(activeId, null),
+                            onChangeTheme: widget.onChangeTheme == null
+                                ? null
+                                : (theme) =>
+                                      widget.onChangeTheme!(activeId, theme),
+                            loadMedia: widget.loadMedia == null
+                                ? null
+                                : ({required images, cursor}) =>
+                                      widget.loadMedia!(
+                                        activeId,
+                                        images: images,
+                                        cursor: cursor,
+                                      ),
                             onSendMessageTo: widget.onSendMessage == null
                                 ? null
                                 : (conversationId, text) =>

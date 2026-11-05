@@ -761,6 +761,7 @@ class HttpSocialApi extends SocialApi {
                   meta['pinnedMessage'] as Json,
                   absoluteUrl: _absoluteUrl,
                 ),
+          theme: meta['theme'] as String?,
         );
       }
       after = page.last.id;
@@ -803,6 +804,39 @@ class HttpSocialApi extends SocialApi {
   @override
   Future<void> unpinMessage(String conversationId) async {
     await _request('DELETE', '/conversations/$conversationId/pin');
+  }
+
+  @override
+  Future<void> setConversationTheme(String conversationId, String theme) async {
+    await _request(
+      'PUT',
+      '/conversations/$conversationId/theme',
+      data: {'theme': theme},
+    );
+  }
+
+  @override
+  Future<MediaPage> loadConversationMedia(
+    String conversationId, {
+    required bool images,
+    String? cursor,
+  }) async {
+    final response = await _request(
+      'GET',
+      '/conversations/$conversationId/media',
+      query: {
+        'type': images ? 'image' : 'file',
+        'limit': 30,
+        'cursor': ?cursor,
+      },
+    );
+    return MediaPage(
+      items: [
+        for (final item in _list(response))
+          attachmentFromJson(item, absoluteUrl: _absoluteUrl),
+      ],
+      nextCursor: (response['meta'] as Json)['nextCursor'] as String?,
+    );
   }
 
   @override

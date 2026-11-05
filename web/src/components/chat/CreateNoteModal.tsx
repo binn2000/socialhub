@@ -296,7 +296,7 @@ export function CreateNoteModal({
                     onClick={() => setSelectedPrivacy(opt.value)}
                     className={`py-1.5 px-2 rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 border transition ${
                       isSelected
-                        ? "bg-brand text-white border-brand shadow-xs"
+                        ? "bg-brand text-white border-brand shadow-sm"
                         : "bg-surface-muted dark:bg-surface-dark-muted border-transparent text-appText-secondary hover:text-appText-primary"
                     }`}
                   >

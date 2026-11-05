@@ -2035,6 +2035,86 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
 
+  /conversations/{conversation}/theme:
+    parameters:
+      - {$ref: '#/components/parameters/ConversationId'}
+    put:
+      tags: [Conversations]
+      operationId: setConversationTheme
+      summary: Choose the bubble colour theme for both people
+      description: '**Authentication:** required. **Authorization:** participants only. One theme per conversation, seen by both people (the colours themselves live in the clients).'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [theme]
+              properties:
+                theme: {$ref: '#/components/schemas/ChatTheme'}
+      responses:
+        '200':
+          description: The theme now in use.
+          content:
+            application/json:
+              schema: {type: object, required: [data], properties: {data: {type: object, required: [theme], properties: {theme: {$ref: '#/components/schemas/ChatTheme'}}}}}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+
+  /conversations/{conversation}/media:
+    parameters:
+      - {$ref: '#/components/parameters/ConversationId'}
+    get:
+      tags: [Conversations]
+      operationId: listConversationMedia
+      summary: Every picture or file shared in the conversation
+      description: |
+        **Authentication:** required. **Authorization:** participants only (`404` otherwise). Newest first, cursor-paged, so
+        it is complete however long the chat is (the messages list only holds the latest page). Recalled messages and
+        ones the caller deleted for themselves are left out. Chat attachments are pictures (`image`) and documents
+        (`file`); there are no videos in chats.
+      parameters:
+        - {name: type, in: query, required: true, schema: {type: string, enum: [image, file]}}
+        - {name: cursor, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 30}}
+      responses:
+        '200':
+          description: One page.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, messageId, senderId, type, url, name, mimeType, sizeBytes, createdAt]
+                      properties:
+                        id: {$ref: '#/components/schemas/Id'}
+                        messageId: {$ref: '#/components/schemas/Id'}
+                        senderId: {$ref: '#/components/schemas/Id'}
+                        type: {type: string, enum: [image, file]}
+                        url: {type: string, format: uri}
+                        name: {type: string}
+                        mimeType: {type: string}
+                        sizeBytes: {type: integer}
+                        width: {type: [integer, 'null']}
+                        height: {type: [integer, 'null']}
+                        createdAt: {type: string, format: date-time}
+                  meta:
+                    type: object
+                    required: [nextCursor, hasMore]
+                    properties:
+                      nextCursor: {type: [string, 'null']}
+                      hasMore: {type: boolean}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+
   /conversations/{conversation}/read:
     post:
       tags: [Conversations]
@@ -2808,6 +2888,12 @@ components:
         privacy: {$ref: '#/components/schemas/Privacy'}
 
     # ------------------------------------------------------------ conversations
+    ChatTheme:
+      type: string
+      enum: [blue, purple, sunset, midnight, emerald]
+      default: blue
+      description: 'Bubble colour theme of a conversation, shared by both people.'
+
     Message:
       type: object
       x-flutter-source: ChatMessage (lib/models/message.dart)
@@ -2860,6 +2946,8 @@ components:
             - $ref: '#/components/schemas/Message'
             - type: 'null'
           description: 'The message pinned for both people, or null (also null when it was recalled or the caller deleted it).'
+        theme:
+          $ref: '#/components/schemas/ChatTheme'
         participant:
           allOf:
             - $ref: '#/components/schemas/UserSummary'
@@ -3086,6 +3174,8 @@ components:
                   anyOf:
                     - $ref: '#/components/schemas/Message'
                     - type: 'null'
+                theme:
+                  $ref: '#/components/schemas/ChatTheme'
                 states:
                   type: object
                   description: 'Only with `after`: what can still change on the latest 100 messages, keyed by message id, so an open chat can follow reactions and recalls.'

@@ -1407,6 +1407,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/conversations/{conversation}/theme": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation: components["parameters"]["ConversationId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Choose the bubble colour theme for both people
+         * @description **Authentication:** required. **Authorization:** participants only. One theme per conversation, seen by both people (the colours themselves live in the clients).
+         */
+        put: operations["setConversationTheme"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/conversations/{conversation}/media": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation: components["parameters"]["ConversationId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Every picture or file shared in the conversation
+         * @description **Authentication:** required. **Authorization:** participants only (`404` otherwise). Newest first, cursor-paged, so
+         *     it is complete however long the chat is (the messages list only holds the latest page). Recalled messages and
+         *     ones the caller deleted for themselves are left out. Chat attachments are pictures (`image`) and documents
+         *     (`file`); there are no videos in chats.
+         */
+        get: operations["listConversationMedia"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/conversations/{conversation}/read": {
         parameters: {
             query?: never;
@@ -1974,6 +2021,12 @@ export interface components {
             trackId?: string;
             privacy?: components["schemas"]["Privacy"];
         };
+        /**
+         * @description Bubble colour theme of a conversation, shared by both people.
+         * @default blue
+         * @enum {string}
+         */
+        ChatTheme: "blue" | "purple" | "sunset" | "midnight" | "emerald";
         Message: {
             id: components["schemas"]["Id"];
             conversationId: components["schemas"]["Id"];
@@ -1998,6 +2051,7 @@ export interface components {
             partnerLastReadMessageId: components["schemas"]["Id"] | null;
             /** @description The message pinned for both people, or null (also null when it was recalled or the caller deleted it). */
             pinnedMessage: components["schemas"]["Message"] | null;
+            theme?: components["schemas"]["ChatTheme"];
             participant: components["schemas"]["UserSummary"] & {
                 isOnline: components["schemas"]["IsOnline"];
                 lastSeenAt: components["schemas"]["LastSeenAt"];
@@ -2179,6 +2233,7 @@ export interface components {
                 partnerLastDeliveredMessageId?: components["schemas"]["Id"] | null;
                 partnerLastReadMessageId?: components["schemas"]["Id"] | null;
                 pinnedMessage?: components["schemas"]["Message"] | null;
+                theme?: components["schemas"]["ChatTheme"];
                 /** @description Only with `after`: what can still change on the latest 100 messages, keyed by message id, so an open chat can follow reactions and recalls. */
                 states?: {
                     [key: string]: {
@@ -4558,6 +4613,92 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             404: components["responses"]["NotFound"];
             429: components["responses"]["TooManyRequests"];
+        };
+    };
+    setConversationTheme: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation: components["parameters"]["ConversationId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    theme: components["schemas"]["ChatTheme"];
+                };
+            };
+        };
+        responses: {
+            /** @description The theme now in use. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            theme: components["schemas"]["ChatTheme"];
+                        };
+                    };
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    listConversationMedia: {
+        parameters: {
+            query: {
+                type: "image" | "file";
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                conversation: components["parameters"]["ConversationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            id: components["schemas"]["Id"];
+                            messageId: components["schemas"]["Id"];
+                            senderId: components["schemas"]["Id"];
+                            /** @enum {string} */
+                            type: "image" | "file";
+                            /** Format: uri */
+                            url: string;
+                            name: string;
+                            mimeType: string;
+                            sizeBytes: number;
+                            width?: number | null;
+                            height?: number | null;
+                            /** Format: date-time */
+                            createdAt: string;
+                        }[];
+                        meta: {
+                            nextCursor: string | null;
+                            hasMore: boolean;
+                        };
+                    };
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationFailed"];
         };
     };
     markConversationRead: {

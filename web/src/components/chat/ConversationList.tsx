@@ -78,7 +78,7 @@ export function ConversationList({
         <button
           type="button"
           onClick={() => setNewChatModalOpen(true)}
-          className="p-2 rounded-xl bg-brand-soft dark:bg-brand/20 text-brand dark:text-brand-light hover:bg-brand/15 transition shadow-xs"
+          className="p-2 rounded-xl bg-brand-soft dark:bg-brand/20 text-brand dark:text-brand-light hover:bg-brand/15 transition shadow-sm"
           title="Tin nhắn mới"
         >
           <Plus className="w-5 h-5" />

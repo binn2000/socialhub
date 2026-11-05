@@ -100,6 +100,9 @@ class Conversation {
   final String? partnerReadId;
   final ChatMessage? pinnedMessage;
 
+  /// Server only: the bubble theme id both people share (null = default).
+  final String? theme;
+
   const Conversation({
     required this.id,
     required this.user,
@@ -110,5 +113,6 @@ class Conversation {
     this.partnerDeliveredId,
     this.partnerReadId,
     this.pinnedMessage,
+    this.theme,
   });
 }

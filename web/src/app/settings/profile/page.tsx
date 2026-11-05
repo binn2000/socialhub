@@ -759,7 +759,7 @@ export default function EditProfilePage() {
         </div>
 
         {/* Card 5: Vùng nguy hiểm (Danger Zone Card) */}
-        <div className="p-6 rounded-2xl border border-red-200 dark:border-red-900/50 bg-red-50/40 dark:bg-red-950/20 shadow-xs space-y-3">
+        <div className="p-6 rounded-2xl border border-red-200 dark:border-red-900/50 bg-red-50/40 dark:bg-red-950/20 shadow-sm space-y-3">
           <div className="flex items-center gap-2 text-red-600 dark:text-red-400">
             <AlertCircle className="w-4.5 h-4.5" />
             <h2 className="text-sm font-semibold">Vùng nguy hiểm</h2>

@@ -9,8 +9,10 @@ import 'package:flutter_learning/models/message.dart';
 import 'package:flutter_learning/utils/chat_search.dart';
 import 'package:flutter_learning/utils/message_status.dart';
 import 'package:flutter_learning/models/user.dart';
+import 'package:flutter_learning/services/social_api.dart' show MediaPage;
 import 'package:flutter_learning/theme/app_tokens.dart';
 import 'package:flutter_learning/widgets/image_viewer.dart';
+import 'package:flutter_learning/screens/chat_detail_screen.dart';
 import 'package:flutter_learning/widgets/user_avatar.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -39,6 +41,12 @@ class ChatScreen extends StatefulWidget {
   final Future<void> Function(String messageId)? onPinMessage;
   final Future<void> Function()? onUnpinMessage;
 
+  /// Server only: chooses the bubble theme for both people, and lists every
+  /// picture or file of the chat (the loaded messages are only the latest).
+  final Future<void> Function(String theme)? onChangeTheme;
+  final Future<MediaPage> Function({required bool images, String? cursor})?
+  loadMedia;
+
   /// Sends a text to another conversation, for "Chuyển tiếp".
   final void Function(String conversationId, String text)? onSendMessageTo;
 
@@ -66,6 +74,8 @@ class ChatScreen extends StatefulWidget {
     this.onSendMessageTo,
     this.onPinMessage,
     this.onUnpinMessage,
+    this.onChangeTheme,
+    this.loadMedia,
     this.isPartnerTyping = false,
     this.onTyping,
     this.refresh,
@@ -614,371 +624,39 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  void _openSharedMediaSheet(BuildContext context) {
-    final conversation = _conversation;
-    final colorScheme = Theme.of(context).colorScheme;
-    final palette = AppPalette.of(context);
+  /// With a server the theme belongs to the conversation (both people see it);
+  /// without one it is a local choice.
+  String get _themeId => widget.onChangeTheme != null
+      ? (_conversation.theme ?? 'blue')
+      : _chatThemeId;
 
-    final mediaAttachments = <ChatAttachment>[];
-    final fileAttachments = <ChatAttachment>[];
-
-    for (final m in conversation.messages) {
-      if (_deletedMessageIds.contains(m.id) ||
-          _unsentMessageIds.contains(m.id)) {
-        continue;
-      }
-      for (final att in m.attachments) {
-        if (att.isImage) {
-          mediaAttachments.add(att);
-        } else {
-          fileAttachments.add(att);
-        }
-      }
-    }
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (bottomSheetContext) {
-        return StatefulBuilder(
-          builder: (context, setSheetState) {
-            return Container(
-              height: MediaQuery.of(context).size.height * 0.85,
-              decoration: BoxDecoration(
-                color: Theme.of(context).scaffoldBackgroundColor,
-                borderRadius: const BorderRadius.vertical(
-                  top: Radius.circular(24),
-                ),
-              ),
-              child: DefaultTabController(
-                length: 2,
-                child: Column(
-                  children: [
-                    const SizedBox(height: 12),
-                    Center(
-                      child: Container(
-                        width: 40,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: palette.border,
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            'Thông tin hội thoại',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.close_rounded),
-                            onPressed: () => Navigator.pop(bottomSheetContext),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Expanded(
-                      child: ListView(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        children: [
-                          Center(
-                            child: Column(
-                              children: [
-                                UserAvatar(
-                                  imageUrl: conversation.user.avatarUrl,
-                                  radius: 36,
-                                ),
-                                const SizedBox(height: 10),
-                                Text(
-                                  conversation.user.name,
-                                  style: const TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  conversation.user.isOnline
-                                      ? 'Đang trực tuyến'
-                                      : (conversation.user.lastSeenAt != null
-                                            ? 'Hoạt động ${conversation.user.lastSeenAt}'
-                                            : 'Ngoại tuyến'),
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: conversation.user.isOnline
-                                        ? palette.success
-                                        : palette.textSecondary,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 20),
-                          Text(
-                            'CHỦ ĐỀ ĐOẠN CHAT',
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 0.5,
-                              color: palette.textSecondary,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          SizedBox(
-                            height: 72,
-                            child: ListView.separated(
-                              scrollDirection: Axis.horizontal,
-                              itemCount: ChatThemes.all.length,
-                              separatorBuilder: (context, index) =>
-                                  const SizedBox(width: 14),
-                              itemBuilder: (context, idx) {
-                                final themeOption = ChatThemes.all[idx];
-                                final isSelected =
-                                    themeOption.id == _chatThemeId;
-                                return GestureDetector(
-                                  onTap: () {
-                                    setState(() {
-                                      _chatThemeId = themeOption.id;
-                                    });
-                                    setSheetState(() {});
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(
-                                          'Đã đổi chủ đề sang ${themeOption.name}',
-                                        ),
-                                        duration: const Duration(seconds: 2),
-                                      ),
-                                    );
-                                  },
-                                  child: Column(
-                                    children: [
-                                      Container(
-                                        width: 42,
-                                        height: 42,
-                                        decoration: BoxDecoration(
-                                          shape: BoxShape.circle,
-                                          gradient: themeOption.gradient,
-                                          color: themeOption.primaryColor,
-                                          border: isSelected
-                                              ? Border.all(
-                                                  color: colorScheme.onSurface,
-                                                  width: 2.5,
-                                                )
-                                              : null,
-                                          boxShadow: isSelected
-                                              ? [
-                                                  BoxShadow(
-                                                    color: themeOption
-                                                        .primaryColor
-                                                        .withValues(alpha: 0.4),
-                                                    blurRadius: 8,
-                                                    spreadRadius: 1,
-                                                  ),
-                                                ]
-                                              : null,
-                                        ),
-                                        child: isSelected
-                                            ? const Icon(
-                                                Icons.check_rounded,
-                                                color: Colors.white,
-                                                size: 20,
-                                              )
-                                            : null,
-                                      ),
-                                      const SizedBox(height: 6),
-                                      Text(
-                                        themeOption.name,
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: isSelected
-                                              ? FontWeight.bold
-                                              : FontWeight.normal,
-                                          color: isSelected
-                                              ? colorScheme.primary
-                                              : palette.textSecondary,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          const Divider(),
-                          const SizedBox(height: 8),
-                          TabBar(
-                            labelColor: colorScheme.primary,
-                            unselectedLabelColor: palette.textSecondary,
-                            indicatorColor: colorScheme.primary,
-                            tabs: [
-                              Tab(
-                                icon: const Icon(
-                                  Icons.photo_library_outlined,
-                                  size: 20,
-                                ),
-                                text: 'Ảnh (${mediaAttachments.length})',
-                              ),
-                              Tab(
-                                icon: const Icon(
-                                  Icons.insert_drive_file_outlined,
-                                  size: 20,
-                                ),
-                                text: 'Tài liệu (${fileAttachments.length})',
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          SizedBox(
-                            height: 320,
-                            child: TabBarView(
-                              children: [
-                                mediaAttachments.isEmpty
-                                    ? Center(
-                                        child: Column(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.center,
-                                          children: [
-                                            Icon(
-                                              Icons.photo_outlined,
-                                              size: 48,
-                                              color: palette.textSecondary
-                                                  .withValues(alpha: 0.4),
-                                            ),
-                                            const SizedBox(height: 8),
-                                            Text(
-                                              'Chưa có ảnh nào được gửi',
-                                              style: TextStyle(
-                                                fontSize: 13,
-                                                color: palette.textSecondary,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      )
-                                    : GridView.builder(
-                                        itemCount: mediaAttachments.length,
-                                        gridDelegate:
-                                            const SliverGridDelegateWithFixedCrossAxisCount(
-                                              crossAxisCount: 3,
-                                              crossAxisSpacing: 6,
-                                              mainAxisSpacing: 6,
-                                            ),
-                                        itemBuilder: (context, i) {
-                                          final att = mediaAttachments[i];
-                                          return GestureDetector(
-                                            onTap: () => showImageViewer(
-                                              context,
-                                              att.url,
-                                            ),
-                                            child: ClipRRect(
-                                              borderRadius:
-                                                  BorderRadius.circular(8),
-                                              child: Image.network(
-                                                att.url,
-                                                fit: BoxFit.cover,
-                                                errorBuilder:
-                                                    (
-                                                      context,
-                                                      error,
-                                                      stackTrace,
-                                                    ) => Container(
-                                                      color: palette.border,
-                                                      child: const Icon(
-                                                        Icons
-                                                            .broken_image_rounded,
-                                                      ),
-                                                    ),
-                                              ),
-                                            ),
-                                          );
-                                        },
-                                      ),
-                                fileAttachments.isEmpty
-                                    ? Center(
-                                        child: Column(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.center,
-                                          children: [
-                                            Icon(
-                                              Icons.description_outlined,
-                                              size: 48,
-                                              color: palette.textSecondary
-                                                  .withValues(alpha: 0.4),
-                                            ),
-                                            const SizedBox(height: 8),
-                                            Text(
-                                              'Chưa có tệp tài liệu nào',
-                                              style: TextStyle(
-                                                fontSize: 13,
-                                                color: palette.textSecondary,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      )
-                                    : ListView.builder(
-                                        itemCount: fileAttachments.length,
-                                        itemBuilder: (context, i) {
-                                          final att = fileAttachments[i];
-                                          return ListTile(
-                                            contentPadding: EdgeInsets.zero,
-                                            leading: Container(
-                                              padding: const EdgeInsets.all(8),
-                                              decoration: BoxDecoration(
-                                                color: colorScheme.primary
-                                                    .withValues(alpha: 0.1),
-                                                borderRadius:
-                                                    BorderRadius.circular(8),
-                                              ),
-                                              child: Icon(
-                                                Icons.insert_drive_file_rounded,
-                                                color: colorScheme.primary,
-                                              ),
-                                            ),
-                                            title: Text(
-                                              att.name,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: const TextStyle(
-                                                fontSize: 13,
-                                                fontWeight: FontWeight.w600,
-                                              ),
-                                            ),
-                                            subtitle: Text(
-                                              att.formattedSize,
-                                              style: TextStyle(
-                                                fontSize: 11,
-                                                color: palette.textSecondary,
-                                              ),
-                                            ),
-                                          );
-                                        },
-                                      ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
+  void _openChatDetails(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatDetailScreen(
+          conversationOf: () => _conversation,
+          currentUser: widget.currentUser,
+          themeIdOf: () => _themeId,
+          pinnedIdOf: () => _pinnedId(_conversation),
+          deletedMessageIds: _deletedMessageIds,
+          unsentMessageIds: _unsentMessageIds,
+          refresh: widget.refresh,
+          loadMedia: widget.loadMedia,
+          onThemeChanged: (newThemeId) {
+            if (widget.onChangeTheme != null) {
+              widget.onChangeTheme!(newThemeId);
+            } else {
+              setState(() => _chatThemeId = newThemeId);
+            }
           },
-        );
-      },
+          onOpenSearch: () {
+            setState(() {
+              _showSearch = true;
+            });
+          },
+        ),
+      ),
     );
   }
 
@@ -987,7 +665,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final colorScheme = Theme.of(context).colorScheme;
     final palette = AppPalette.of(context);
     final conversation = _conversation;
-    final selectedTheme = ChatThemes.findById(_chatThemeId);
+    final selectedTheme = ChatThemes.findById(_themeId);
     if (conversation.messages.length != _shownMessageCount) {
       _shownMessageCount = conversation.messages.length;
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
@@ -1004,7 +682,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 icon: const Icon(Icons.arrow_back_rounded),
               ),
         title: GestureDetector(
-          onTap: () => _openSharedMediaSheet(context),
+          onTap: () => _openChatDetails(context),
           behavior: HitTestBehavior.opaque,
           child: Row(
             children: [
@@ -1062,7 +740,7 @@ class _ChatScreenState extends State<ChatScreen> {
           IconButton(
             icon: const Icon(Icons.info_outline_rounded),
             tooltip: 'Thông tin hội thoại, chủ đề & tệp chia sẻ',
-            onPressed: () => _openSharedMediaSheet(context),
+            onPressed: () => _openChatDetails(context),
           ),
         ],
       ),

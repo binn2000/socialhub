@@ -589,7 +589,7 @@ export function PostCard({
                     </div>
                   </div>
                   {post.video.durationSeconds && (
-                    <span className="absolute bottom-3 right-3 px-2 py-0.5 rounded bg-black/70 text-white text-xs font-medium backdrop-blur-xs flex items-center gap-1">
+                    <span className="absolute bottom-3 right-3 px-2 py-0.5 rounded bg-black/70 text-white text-xs font-medium backdrop-blur-sm flex items-center gap-1">
                       <Clock className="w-3 h-3" />
                       {Math.floor(post.video.durationSeconds / 60)}:
                       {(post.video.durationSeconds % 60).toString().padStart(2, "0")}

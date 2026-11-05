@@ -395,7 +395,7 @@ export function CreatePostCard({ onPostCreated }: CreatePostCardProps) {
                         <button
                           type="button"
                           onClick={() => handleRemoveImage(idx)}
-                          className="absolute top-1.5 right-1.5 p-1 rounded-full bg-black/60 hover:bg-black/80 text-white transition backdrop-blur-xs"
+                          className="absolute top-1.5 right-1.5 p-1 rounded-full bg-black/60 hover:bg-black/80 text-white transition backdrop-blur-sm"
                           title="Xóa ảnh"
                         >
                           <X className="w-3.5 h-3.5" />
@@ -417,7 +417,7 @@ export function CreatePostCard({ onPostCreated }: CreatePostCardProps) {
                   <button
                     type="button"
                     onClick={handleRemoveVideo}
-                    className="absolute top-2 right-2 p-1.5 rounded-full bg-black/60 hover:bg-black/80 text-white transition backdrop-blur-xs z-10"
+                    className="absolute top-2 right-2 p-1.5 rounded-full bg-black/60 hover:bg-black/80 text-white transition backdrop-blur-sm z-10"
                     title="Xóa video"
                   >
                     <X className="w-4 h-4" />

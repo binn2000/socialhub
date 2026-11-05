@@ -293,6 +293,7 @@ Conversation conversationFromJson(
             json['pinnedMessage'] as Json,
             absoluteUrl: absoluteUrl,
           ),
+    theme: json['theme'] as String?,
   );
 }
 

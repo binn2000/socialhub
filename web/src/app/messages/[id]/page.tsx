@@ -24,7 +24,7 @@ export default function MessageDetailPage() {
   };
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] md:h-screen w-full bg-surface-light dark:bg-surface-dark overflow-hidden">
+    <div className="flex h-full w-full bg-surface-light dark:bg-surface-dark overflow-hidden">
       {/* Left Column: Conversation List - hidden on mobile, visible on desktop */}
       <div className="hidden md:flex w-80 lg:w-96 shrink-0 border-r border-appBorder-light dark:border-appBorder-dark h-full flex-col">
         <ConversationList

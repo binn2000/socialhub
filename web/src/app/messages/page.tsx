@@ -62,7 +62,7 @@ function MessagesContent() {
   };
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] md:h-screen w-full bg-surface-light dark:bg-surface-dark overflow-hidden">
+    <div className="flex h-full w-full bg-surface-light dark:bg-surface-dark overflow-hidden">
       {/* Left Column: Conversation List */}
       {/* On desktop: always visible (w-80 or w-96) */}
       {/* On mobile: visible when NO conversation is selected, or hidden if conversation is open */}

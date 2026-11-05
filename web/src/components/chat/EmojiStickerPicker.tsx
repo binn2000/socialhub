@@ -233,7 +233,7 @@ export function EmojiStickerPicker({
             onClick={() => setActiveTab("emojis")}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
               activeTab === "emojis"
-                ? "bg-white dark:bg-surface-dark-muted text-brand shadow-xs"
+                ? "bg-white dark:bg-surface-dark-muted text-brand shadow-sm"
                 : "text-appText-secondary hover:text-appText-primary dark:hover:text-white"
             }`}
           >
@@ -246,7 +246,7 @@ export function EmojiStickerPicker({
             onClick={() => setActiveTab("stickers")}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
               activeTab === "stickers"
-                ? "bg-white dark:bg-surface-dark-muted text-brand shadow-xs"
+                ? "bg-white dark:bg-surface-dark-muted text-brand shadow-sm"
                 : "text-appText-secondary hover:text-appText-primary dark:hover:text-white"
             }`}
           >
@@ -308,7 +308,7 @@ export function EmojiStickerPicker({
                     }}
                     className={`px-3 py-1.5 rounded-xl text-xs font-medium whitespace-nowrap transition flex items-center gap-1.5 shrink-0 cursor-pointer ${
                       activeEmojiCat === cat.id
-                        ? "bg-brand/10 text-brand dark:bg-brand/20 dark:text-brand-light font-semibold border border-brand/20 shadow-xs"
+                        ? "bg-brand/10 text-brand dark:bg-brand/20 dark:text-brand-light font-semibold border border-brand/20 shadow-sm"
                         : "text-appText-secondary hover:bg-surface-muted dark:hover:bg-surface-dark-muted border border-transparent"
                     }`}
                   >
@@ -397,7 +397,7 @@ export function EmojiStickerPicker({
                     }}
                     className={`px-3 py-1.5 rounded-xl text-xs font-medium whitespace-nowrap transition flex items-center gap-1.5 shrink-0 cursor-pointer ${
                       activeStickerPack === pack.id
-                        ? "bg-brand/10 text-brand dark:bg-brand/20 dark:text-brand-light font-semibold border border-brand/20 shadow-xs"
+                        ? "bg-brand/10 text-brand dark:bg-brand/20 dark:text-brand-light font-semibold border border-brand/20 shadow-sm"
                         : "text-appText-secondary hover:bg-surface-muted dark:hover:bg-surface-dark-muted border border-transparent"
                     }`}
                   >

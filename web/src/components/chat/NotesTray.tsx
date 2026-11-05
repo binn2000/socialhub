@@ -118,7 +118,7 @@ export function NotesTray({ onOpenConversation, className = "" }: NotesTrayProps
               className={myNote ? "ring-2 ring-brand/40" : ""}
             />
             {!myNote && (
-              <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-brand text-white flex items-center justify-center shadow-xs">
+              <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-brand text-white flex items-center justify-center shadow-sm">
                 <Plus size={11} />
               </div>
             )}

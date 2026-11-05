@@ -26,6 +26,8 @@ import {
   ChevronUp,
   ChevronDown,
   Info,
+  ThumbsUp,
+  UploadCloud,
 } from "lucide-react";
 import { UserAvatar } from "@/components/ui/UserAvatar";
 import { timeAgo } from "@/lib/time-ago";
@@ -58,6 +60,7 @@ interface ChatMeta {
   partnerLastDeliveredMessageId?: string | null;
   partnerLastReadMessageId?: string | null;
   pinnedMessage?: Message | null;
+  theme?: string;
 }
 
 interface ChatPaneProps {
@@ -147,29 +150,33 @@ export function ChatPane({
     [conversationId, pinnedMessage?.id, toast]
   );
 
+  // The theme belongs to the conversation on the server, so both people (and every device) see the same colours.
+  // While my own change is on its way a poll must not put the old value back.
+  const pendingThemeRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (!conversationId) return;
-    try {
-      const storedTheme = localStorage.getItem(`chat_theme_${conversationId}`);
-      if (storedTheme) {
-        setChatThemeId(storedTheme);
-      } else {
-        setChatThemeId("blue");
-      }
-    } catch {
-      // Ignore
-    }
+    setChatThemeId("blue");
+    pendingThemeRef.current = null;
   }, [conversationId]);
 
-  const handleSelectTheme = useCallback((themeId: string) => {
+  const handleSelectTheme = useCallback(async (themeId: string) => {
+    if (themeId === chatThemeId) return;
+    const previous = chatThemeId;
     setChatThemeId(themeId);
+    pendingThemeRef.current = themeId;
     try {
-      localStorage.setItem(`chat_theme_${conversationId}`, themeId);
+      await clientFetch(`/conversations/${conversationId}/theme`, {
+        method: "PUT",
+        body: JSON.stringify({ theme: themeId }),
+      });
+      toast.success(`Đã đổi chủ đề sang ${getChatTheme(themeId).name}`);
     } catch {
-      // Ignore
+      setChatThemeId(previous);
+      toast.error("Không đổi được chủ đề, vui lòng thử lại");
+    } finally {
+      pendingThemeRef.current = null;
     }
-    toast.success(`Đã đổi chủ đề sang ${getChatTheme(themeId).name}`);
-  }, [conversationId, toast]);
+  }, [chatThemeId, conversationId, toast]);
 
   const replaceMessage = useCallback((updated: Message) => {
     setMessages((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
@@ -270,29 +277,41 @@ export function ChatPane({
     [toast]
   );
 
-  const scrollToMessage = useCallback((msgId: string) => {
-    const el = document.getElementById(`msg-${msgId}`);
-    if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-      el.classList.add("ring-2", "ring-brand", "ring-offset-2");
-      setTimeout(() => {
-        el.classList.remove("ring-2", "ring-brand", "ring-offset-2");
-      }, 1500);
-    } else {
-      toast.info("Tin nhắn gốc ở vị trí xa hơn trong lịch sử");
-    }
-  }, [toast]);
-
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastSentTypingRef = useRef<boolean>(false);
 
   const scrollToBottom = useCallback((smooth = false) => {
-    messagesEndRef.current?.scrollIntoView({
-      behavior: smooth ? "smooth" : "auto",
-    });
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    if (smooth) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    } else {
+      el.scrollTop = el.scrollHeight;
+    }
   }, []);
+
+  const scrollToMessage = useCallback((msgId: string) => {
+    const container = messagesContainerRef.current;
+    const targetEl = document.getElementById(`msg-${msgId}`);
+    if (container && targetEl) {
+      const containerRect = container.getBoundingClientRect();
+      const targetRect = targetEl.getBoundingClientRect();
+      const relativeTop = targetRect.top - containerRect.top + container.scrollTop;
+      container.scrollTo({
+        top: Math.max(0, relativeTop - container.clientHeight / 2 + targetRect.height / 2),
+        behavior: "smooth",
+      });
+      targetEl.classList.add("ring-2", "ring-brand", "ring-offset-2");
+      setTimeout(() => {
+        targetEl.classList.remove("ring-2", "ring-brand", "ring-offset-2");
+      }, 1500);
+    } else {
+      toast.info("Tin nhắn gốc ở vị trí xa hơn trong lịch sử");
+    }
+  }, [toast]);
 
   // 1. Initial Load of Messages & Conversation
   /** What the server says besides the messages: the other person's markers and the pin. */
@@ -301,6 +320,7 @@ export function ChatPane({
     if (meta.partnerLastDeliveredMessageId !== undefined) setPartnerDeliveredId(meta.partnerLastDeliveredMessageId);
     if (meta.partnerLastReadMessageId !== undefined) setPartnerReadId(meta.partnerLastReadMessageId);
     if (meta.pinnedMessage !== undefined) setPinnedMessage(meta.pinnedMessage);
+    if (meta.theme && pendingThemeRef.current === null) setChatThemeId(meta.theme);
   }, []);
 
   const loadInitialData = useCallback(async () => {
@@ -416,23 +436,111 @@ export function ChatPane({
     }
   };
 
-  // 4. File picker
+  // 4. File handling (Picker, Paste, Drag & Drop)
+  const addFilesToPending = useCallback(
+    (filesToAdd: File[]) => {
+      if (filesToAdd.length === 0) return;
+
+      const availableSlots = 5 - pendingFiles.length;
+      if (availableSlots <= 0) {
+        toast.info("Đã đạt giới hạn tối đa 5 tệp đính kèm");
+        return;
+      }
+
+      const addedFiles = filesToAdd.slice(0, availableSlots);
+      const newPreviews = addedFiles.map((f) =>
+        f.type.startsWith("image/") ? URL.createObjectURL(f) : ""
+      );
+
+      setPendingFiles((prev) => [...prev, ...addedFiles]);
+      setPendingPreviews((prev) => [...prev, ...newPreviews]);
+
+      if (addedFiles.length < filesToAdd.length) {
+        toast.info(`Chỉ có thể thêm tối đa 5 tệp. Đã thêm ${addedFiles.length} tệp.`);
+      } else {
+        toast.success(`Đã thêm ${addedFiles.length} tệp đính kèm`);
+      }
+    },
+    [pendingFiles.length, toast]
+  );
+
   const handlePickFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    if (files.length === 0) return;
-
-    const availableSlots = 5 - pendingFiles.length;
-    const addedFiles = files.slice(0, availableSlots);
-
-    const newPreviews = addedFiles.map((f) =>
-      f.type.startsWith("image/") ? URL.createObjectURL(f) : ""
-    );
-
-    setPendingFiles((prev) => [...prev, ...addedFiles]);
-    setPendingPreviews((prev) => [...prev, ...newPreviews]);
-
+    addFilesToPending(files);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
+
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      const imageFiles: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.startsWith("image/")) {
+          const file = item.getAsFile();
+          if (file) {
+            const fileName =
+              file.name && file.name !== "image.png"
+                ? file.name
+                : `screenshot_${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
+            const namedFile = new File([file], fileName, { type: file.type });
+            imageFiles.push(namedFile);
+          }
+        }
+      }
+
+      if (imageFiles.length > 0) {
+        e.preventDefault();
+        addFilesToPending(imageFiles);
+      }
+    },
+    [addFilesToPending]
+  );
+
+  // Drag & Drop handlers
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const dragCounterRef = useRef(0);
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current += 1;
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      setIsDraggingOver(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setIsDraggingOver(false);
+    }
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounterRef.current = 0;
+      setIsDraggingOver(false);
+
+      const files = Array.from(e.dataTransfer.files || []);
+      if (files.length > 0) {
+        addFilesToPending(files);
+      }
+    },
+    [addFilesToPending]
+  );
 
   const handleRemoveFile = (index: number) => {
     setPendingFiles((prev) => prev.filter((_, i) => i !== index));
@@ -604,7 +712,7 @@ export function ChatPane({
 
   return (
     <div
-      className={`flex flex-col h-full bg-surface-muted dark:bg-appBg-dark overflow-hidden ${className}`}
+      className={`flex flex-row h-full w-full bg-surface-muted dark:bg-appBg-dark overflow-hidden ${className}`}
     >
       <input
         ref={fileInputRef}
@@ -614,6 +722,9 @@ export function ChatPane({
         onChange={handlePickFiles}
         className="hidden"
       />
+
+      {/* Main Chat Column */}
+      <div className="flex-1 flex flex-col h-full min-w-0 overflow-hidden relative">
 
       {/* Header bar */}
       <div className="p-3.5 sm:px-6 bg-white dark:bg-surface-dark border-b border-appBorder-light dark:border-appBorder-dark flex items-center justify-between z-10 select-none">
@@ -773,7 +884,10 @@ export function ChatPane({
       )}
 
       {/* Messages Scroll Area */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3">
+      <div
+        ref={messagesContainerRef}
+        className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3"
+      >
         {loading ? (
           <div className="py-24 flex flex-col items-center justify-center text-appText-secondary">
             <div className="w-7 h-7 border-2 border-brand border-t-transparent rounded-full animate-spin mb-2" />
@@ -1012,10 +1126,10 @@ export function ChatPane({
                 </div>
 
                 <div
-                  className={`relative max-w-[85%] sm:max-w-[70%] rounded-2xl p-3 shadow-xs space-y-2 ${
+                  className={`relative max-w-[85%] sm:max-w-[70%] rounded-2xl p-3 shadow-sm space-y-2 ${
                     isMine
                       ? activeTheme.bubbleClass
-                      : "bg-white dark:bg-surface-dark-muted text-appText-primary dark:text-appText-dark-primary border border-appBorder-light/80 dark:border-appBorder-dark/80 rounded-bl-xs"
+                      : "bg-white dark:bg-surface-dark-muted text-appText-primary dark:text-appText-dark-primary border border-appBorder-light/80 dark:border-appBorder-dark/80 rounded-bl-md"
                   }`}
                   style={isMine ? activeTheme.bubbleStyle : undefined}
                 >
@@ -1378,7 +1492,10 @@ export function ChatPane({
           onClose={() => setForwarding(null)}
         />
       )}
+      </div>
+
       <SharedMediaDrawer
+        conversationId={conversationId}
         isOpen={showMediaDrawer}
         onClose={() => setShowMediaDrawer(false)}
         participant={participant}

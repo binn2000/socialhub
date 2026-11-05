@@ -69,6 +69,9 @@ class MessagePoll {
   final String? partnerReadId;
   final ChatMessage? pinnedMessage;
 
+  /// The shared bubble theme id, when the server said it.
+  final String? theme;
+
   const MessagePoll({
     this.messages = const [],
     this.otherTyping = false,
@@ -77,7 +80,16 @@ class MessagePoll {
     this.partnerDeliveredId,
     this.partnerReadId,
     this.pinnedMessage,
+    this.theme,
   });
+}
+
+/// One page of the pictures or files shared in a conversation.
+class MediaPage {
+  final List<ChatAttachment> items;
+  final String? nextCursor;
+
+  const MediaPage({this.items = const [], this.nextCursor});
 }
 
 class NotificationPage {
@@ -348,6 +360,20 @@ abstract class SocialApi {
   ) async => null;
 
   Future<void> unpinMessage(String conversationId) async {}
+
+  /// Chooses the bubble theme for both people (server only).
+  Future<void> setConversationTheme(
+    String conversationId,
+    String theme,
+  ) async {}
+
+  /// Every picture ([images] true) or document of a conversation, newest first,
+  /// paged (server only; the mock app has no such list).
+  Future<MediaPage> loadConversationMedia(
+    String conversationId, {
+    required bool images,
+    String? cursor,
+  }) async => const MediaPage();
 
   /// "Thu hồi": takes my message back for both people.
   Future<ChatMessage?> recallMessage(

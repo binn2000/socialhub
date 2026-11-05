@@ -1499,6 +1499,8 @@ class _MainScreenState extends State<MainScreen> {
           onRecallMessage: widget.api.isRemote ? _recallMessage : null,
           onHideMessage: widget.api.isRemote ? _hideMessage : null,
           onPinMessage: widget.api.isRemote ? _pinMessage : null,
+          onChangeTheme: widget.api.isRemote ? _setTheme : null,
+          loadMedia: widget.api.isRemote ? _loadMedia : null,
           conversations: _conversations,
           notes: widget.api.isRemote ? _notes : null,
           onSetNote: widget.api.isRemote ? _handleSetNote : null,
@@ -1557,6 +1559,7 @@ class _MainScreenState extends State<MainScreen> {
               partnerDeliveredId: conversation.partnerDeliveredId,
               partnerReadId: conversation.partnerReadId,
               pinnedMessage: conversation.pinnedMessage,
+              theme: _pendingThemes[conversation.id] ?? conversation.theme,
             ),
         ];
         _conversations
@@ -1638,6 +1641,7 @@ class _MainScreenState extends State<MainScreen> {
             partnerReadId: poll.partnerReadId,
             pinnedMessage: poll.pinnedMessage,
             clearPinnedMessage: poll.pinnedMessage == null,
+            theme: _pendingThemes.containsKey(id) ? null : poll.theme,
           ),
         );
       }
@@ -1821,6 +1825,16 @@ class _MainScreenState extends State<MainScreen> {
               onUnpinMessage: widget.api.isRemote
                   ? () => _pinMessage(conversation.id, null)
                   : null,
+              onChangeTheme: widget.api.isRemote
+                  ? (theme) => _setTheme(conversation.id, theme)
+                  : null,
+              loadMedia: widget.api.isRemote
+                  ? ({required images, cursor}) => _loadMedia(
+                      conversation.id,
+                      images: images,
+                      cursor: cursor,
+                    )
+                  : null,
               onSendMessageTo: widget.api.isRemote
                   ? (conversationId, text) =>
                         _handleSendMessage(conversationId, text)
@@ -1934,6 +1948,48 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   /// Pins a message for both people (or removes the pin when [messageId] is null).
+  /// Themes I chose that the server has not confirmed yet, so a poll that was
+  /// already on its way cannot put the old colour back.
+  final Map<String, String> _pendingThemes = {};
+
+  Future<void> _setTheme(String conversationId, String theme) async {
+    final previous = _findConversation(conversationId)?.theme;
+    _pendingThemes[conversationId] = theme;
+    _updateConversation(
+      conversationId,
+      (current) => _copyConversation(current, theme: theme),
+    );
+    try {
+      await _guard(
+        () => widget.api.setConversationTheme(conversationId, theme),
+      );
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      _updateConversation(
+        conversationId,
+        (current) => _copyConversation(current, theme: previous ?? 'blue'),
+      );
+      if (error.isUnauthenticated) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.displayMessage)));
+    } finally {
+      _pendingThemes.remove(conversationId);
+    }
+  }
+
+  Future<MediaPage> _loadMedia(
+    String conversationId, {
+    required bool images,
+    String? cursor,
+  }) => _guard(
+    () => widget.api.loadConversationMedia(
+      conversationId,
+      images: images,
+      cursor: cursor,
+    ),
+  );
+
   Future<void> _pinMessage(String conversationId, String? messageId) async {
     try {
       final pinned = messageId == null
@@ -2123,6 +2179,7 @@ class _MainScreenState extends State<MainScreen> {
     String? partnerReadId,
     ChatMessage? pinnedMessage,
     bool clearPinnedMessage = false,
+    String? theme,
   }) {
     return Conversation(
       id: conversation.id,
@@ -2136,6 +2193,7 @@ class _MainScreenState extends State<MainScreen> {
       pinnedMessage: clearPinnedMessage
           ? null
           : (pinnedMessage ?? conversation.pinnedMessage),
+      theme: theme ?? conversation.theme,
     );
   }
 
