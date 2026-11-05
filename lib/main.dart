@@ -1495,6 +1495,9 @@ class _MainScreenState extends State<MainScreen> {
       MaterialPageRoute(
         builder: (_) => MessagesScreen(
           onReactToNote: widget.api.isRemote ? _reactToNote : null,
+          onReactToMessage: widget.api.isRemote ? _reactToMessage : null,
+          onRecallMessage: widget.api.isRemote ? _recallMessage : null,
+          onHideMessage: widget.api.isRemote ? _hideMessage : null,
           conversations: _conversations,
           notes: widget.api.isRemote ? _notes : null,
           onSetNote: widget.api.isRemote ? _handleSetNote : null,
@@ -1620,6 +1623,8 @@ class _MainScreenState extends State<MainScreen> {
       if (!mounted || _openChatId != id || _sendsInFlight > 0) return;
       _partnerTyping.value = poll.otherTyping;
       final incoming = poll.messages;
+
+      _applyMessageStates(id, poll.states);
 
       final known = _findConversation(id)!.messages.map((m) => m.id).toSet();
       final fresh = incoming.where((m) => !known.contains(m.id)).toList();
@@ -1784,6 +1789,20 @@ class _MainScreenState extends State<MainScreen> {
                 attachmentPaths: attachmentPaths,
               ),
               onPickAttachment: widget.api.isRemote ? _pickPhoto : null,
+              onReactToMessage: widget.api.isRemote
+                  ? (messageId, emoji) =>
+                        _reactToMessage(conversation.id, messageId, emoji)
+                  : null,
+              onRecallMessage: widget.api.isRemote
+                  ? (messageId) => _recallMessage(conversation.id, messageId)
+                  : null,
+              onHideMessage: widget.api.isRemote
+                  ? (messageId) => _hideMessage(conversation.id, messageId)
+                  : null,
+              onSendMessageTo: widget.api.isRemote
+                  ? (conversationId, text) =>
+                        _handleSendMessage(conversationId, text)
+                  : null,
               onTyping: widget.api.isRemote
                   ? (typing) {
                       if (typing) {
@@ -1803,6 +1822,131 @@ class _MainScreenState extends State<MainScreen> {
       _chatTimer = null;
       _openChatId = null;
       _partnerTyping.value = false;
+    }
+  }
+
+  /// Follows what the server says changed on known messages (reactions, recalls).
+  void _applyMessageStates(
+    String conversationId,
+    Map<String, MessageState> states,
+  ) {
+    if (states.isEmpty) return;
+    final conversation = _findConversation(conversationId);
+    if (conversation == null) return;
+    var changed = false;
+    final updated = [
+      for (final message in conversation.messages)
+        if (states[message.id] case final state? when _differs(message, state))
+          message.withState(state)
+        else
+          message,
+    ];
+    for (var i = 0; i < updated.length; i++) {
+      if (!identical(updated[i], conversation.messages[i])) changed = true;
+    }
+    if (changed) {
+      _updateConversation(
+        conversationId,
+        (current) => _copyConversation(current, messages: updated),
+      );
+    }
+  }
+
+  bool _differs(ChatMessage message, MessageState state) =>
+      message.isRecalled != state.isRecalled ||
+      message.myReaction != state.myReaction ||
+      message.reactions.toString() != state.reactions.toString();
+
+  void _replaceMessage(String conversationId, ChatMessage replacement) {
+    _updateConversation(
+      conversationId,
+      (current) => _copyConversation(
+        current,
+        messages: [
+          for (final m in current.messages)
+            m.id == replacement.id ? replacement : m,
+        ],
+      ),
+    );
+  }
+
+  /// My reaction on a message (null takes it back), shown at once and undone
+  /// if the server refuses.
+  Future<void> _reactToMessage(
+    String conversationId,
+    String messageId,
+    String? emoji,
+  ) async {
+    final conversation = _findConversation(conversationId);
+    final before = conversation?.messages
+        .where((m) => m.id == messageId)
+        .firstOrNull;
+    if (before == null || before.isRecalled) return;
+
+    final counts = {...before.reactions};
+    final old = before.myReaction;
+    if (old != null) {
+      final left = (counts[old] ?? 1) - 1;
+      left <= 0 ? counts.remove(old) : counts[old] = left;
+    }
+    if (emoji != null) counts[emoji] = (counts[emoji] ?? 0) + 1;
+    _replaceMessage(
+      conversationId,
+      before.withState(MessageState(reactions: counts, myReaction: emoji)),
+    );
+
+    try {
+      final saved = await _guard(
+        () => widget.api.reactToMessage(conversationId, messageId, emoji),
+      );
+      if (saved != null && mounted) _replaceMessage(conversationId, saved);
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      _replaceMessage(conversationId, before);
+      if (!error.isUnauthenticated) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.displayMessage)));
+      }
+    }
+  }
+
+  Future<void> _recallMessage(String conversationId, String messageId) async {
+    try {
+      final saved = await _guard(
+        () => widget.api.recallMessage(conversationId, messageId),
+      );
+      if (saved != null && mounted) {
+        _replaceMessage(conversationId, saved);
+        _refreshConversations();
+      }
+    } on ApiException catch (error) {
+      if (!mounted || error.isUnauthenticated) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.displayMessage)));
+    }
+  }
+
+  Future<void> _hideMessage(String conversationId, String messageId) async {
+    try {
+      await _guard(() => widget.api.hideMessage(conversationId, messageId));
+      if (!mounted) return;
+      _updateConversation(
+        conversationId,
+        (current) => _copyConversation(
+          current,
+          messages: [
+            for (final m in current.messages)
+              if (m.id != messageId) m,
+          ],
+        ),
+      );
+    } on ApiException catch (error) {
+      if (!mounted || error.isUnauthenticated) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.displayMessage)));
     }
   }
 

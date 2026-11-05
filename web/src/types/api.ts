@@ -1300,6 +1300,85 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/conversations/{conversation}/messages/{message}/reaction": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation: components["parameters"]["ConversationId"];
+                message: components["schemas"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * React to a message
+         * @description **Authentication:** required. **Authorization:** participants only; a message the caller deleted for themselves
+         *     or that is not in the conversation is `404`. One reaction per person and message: another emoji replaces the
+         *     old one. `emoji` is one of the six in `MessageReaction` (the heart is accepted with or without its variation
+         *     selector). A recalled message answers `409` (`message_recalled`). The answer is the message with its state.
+         */
+        put: operations["reactToMessage"];
+        post?: never;
+        /**
+         * Take back my reaction
+         * @description **Authentication:** required. Idempotent. Same authorization and answer as `PUT`.
+         */
+        delete: operations["unreactToMessage"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/conversations/{conversation}/messages/{message}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation: components["parameters"]["ConversationId"];
+                message: components["schemas"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Recall a message (Thu hồi)
+         * @description **Authentication:** required. **Authorization:** only the sender (`403` otherwise). The text, the attachments
+         *     (the files are deleted) and the reactions are removed for **both** people; the message keeps its place with
+         *     `isRecalled: true` and `text: ""`. Idempotent.
+         */
+        delete: operations["recallMessage"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/conversations/{conversation}/messages/{message}/hide": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation: components["parameters"]["ConversationId"];
+                message: components["schemas"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Delete a message for me (Xóa ở phía tôi)
+         * @description **Authentication:** required. The message disappears from the caller's lists and polls only; the other person
+         *     still has it. Idempotent.
+         */
+        put: operations["hideMessage"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/conversations/{conversation}/read": {
         parameters: {
             query?: never;
@@ -1871,8 +1950,15 @@ export interface components {
             id: components["schemas"]["Id"];
             conversationId: components["schemas"]["Id"];
             senderId: components["schemas"]["Id"];
-            /** @description Empty (`""`) for a message that only has attachments. */
+            /** @description Empty (`""`) for a message that only has attachments, and for a recalled one. */
             text: string;
+            /** @description The sender took the message back: no text, no attachments, no reactions. */
+            isRecalled: boolean;
+            /** @description People per reaction emoji, for example `{"😂": 1, "😡": 1}`. */
+            reactions: {
+                [key: string]: number;
+            };
+            myReaction: components["schemas"]["MessageReaction"] | null;
             attachments: components["schemas"]["Attachment"][];
             createdAt: components["schemas"]["Timestamp"];
         };
@@ -2050,10 +2136,22 @@ export interface components {
         MessageEnvelope: {
             data: components["schemas"]["Message"];
         };
+        /** @enum {string} */
+        MessageReaction: "❤️" | "👍" | "😂" | "😮" | "😢" | "😡";
         MessagePage: {
             data: components["schemas"]["Message"][];
             meta: components["schemas"]["CursorMeta"] & {
                 otherTyping: boolean;
+                /** @description Only with `after`: what can still change on the latest 100 messages, keyed by message id, so an open chat can follow reactions and recalls. */
+                states?: {
+                    [key: string]: {
+                        reactions: {
+                            [key: string]: number;
+                        };
+                        myReaction: components["schemas"]["MessageReaction"] | null;
+                        isRecalled: boolean;
+                    };
+                };
             };
         };
         NotificationPage: {
@@ -4228,6 +4326,129 @@ export interface operations {
             422: components["responses"]["ValidationFailed"];
             429: components["responses"]["TooManyRequests"];
             500: components["responses"]["ServerError"];
+        };
+    };
+    reactToMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation: components["parameters"]["ConversationId"];
+                message: components["schemas"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    emoji: components["schemas"]["MessageReaction"];
+                };
+            };
+        };
+        responses: {
+            /** @description The message. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Message"];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+            /** @description The message was recalled. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    unreactToMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation: components["parameters"]["ConversationId"];
+                message: components["schemas"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The message. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Message"];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    recallMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation: components["parameters"]["ConversationId"];
+                message: components["schemas"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The recalled message. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Message"];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    hideMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation: components["parameters"]["ConversationId"];
+                message: components["schemas"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Hidden. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
         };
     };
     markConversationRead: {

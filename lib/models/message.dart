@@ -41,12 +41,47 @@ class ChatMessage {
   final String time;
   final List<ChatAttachment> attachments;
 
+  /// Server only: the sender took the message back, how many people used each
+  /// reaction emoji, and my own reaction.
+  final bool isRecalled;
+  final Map<String, int> reactions;
+  final String? myReaction;
+
   const ChatMessage({
     required this.id,
     required this.senderId,
     required this.text,
     required this.time,
     this.attachments = const [],
+    this.isRecalled = false,
+    this.reactions = const {},
+    this.myReaction,
+  });
+
+  /// The message with a new state (what the server says can change later).
+  ChatMessage withState(MessageState state) => ChatMessage(
+    id: id,
+    senderId: senderId,
+    // A recalled message loses its text and files for everybody.
+    text: state.isRecalled ? '' : text,
+    time: time,
+    attachments: state.isRecalled ? const [] : attachments,
+    isRecalled: state.isRecalled,
+    reactions: state.reactions,
+    myReaction: state.myReaction,
+  );
+}
+
+/// What can still change on a message: reactions and being recalled.
+class MessageState {
+  final Map<String, int> reactions;
+  final String? myReaction;
+  final bool isRecalled;
+
+  const MessageState({
+    this.reactions = const {},
+    this.myReaction,
+    this.isRecalled = false,
   });
 }
 

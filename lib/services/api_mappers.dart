@@ -236,6 +236,21 @@ ChatAttachment attachmentFromJson(
   );
 }
 
+Map<String, int> _countsFromJson(Object? json) => {
+  for (final entry in ((json as Json?) ?? const {}).entries)
+    entry.key: entry.value as int,
+};
+
+/// The `meta.states` of a poll: message id -> what changed on it.
+Map<String, MessageState> messageStatesFromJson(Object? json) => {
+  for (final entry in ((json as Json?) ?? const {}).entries)
+    entry.key: MessageState(
+      reactions: _countsFromJson((entry.value as Json)['reactions']),
+      myReaction: (entry.value as Json)['myReaction'] as String?,
+      isRecalled: (entry.value as Json)['isRecalled'] == true,
+    ),
+};
+
 ChatMessage messageFromJson(Json json, {String Function(String)? absoluteUrl}) {
   final rawAttachments = json['attachments'] as List<dynamic>?;
   return ChatMessage(
@@ -243,6 +258,9 @@ ChatMessage messageFromJson(Json json, {String Function(String)? absoluteUrl}) {
     senderId: json['senderId'] as String,
     text: json['text'] as String,
     time: timeAgo(json['createdAt'] as String),
+    isRecalled: json['isRecalled'] == true,
+    reactions: _countsFromJson(json['reactions']),
+    myReaction: json['myReaction'] as String?,
     attachments: rawAttachments != null
         ? [
             for (final a in rawAttachments)
@@ -261,7 +279,9 @@ Conversation conversationFromJson(
   return Conversation(
     id: json['id'] as String,
     user: userFromJson(json['participant'] as Json, absoluteUrl: absoluteUrl),
-    lastMessage: (last?['text'] as String?) ?? '',
+    lastMessage: last?['isRecalled'] == true
+        ? 'Tin nhắn đã được thu hồi'
+        : (last?['text'] as String?) ?? '',
     time: timeAgo((last?['createdAt'] ?? json['updatedAt']) as String),
     unreadCount: json['unreadCount'] as int,
     messages: const [],

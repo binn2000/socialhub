@@ -1,3 +1,5 @@
+import { parseReplyMessage } from "@/lib/chat-interactions";
+
 export interface EmojiCategory {
   id: string;
   name: string;
@@ -195,6 +197,9 @@ export function parseStickerMessage(text?: string | null): { id: string; url: st
 
 export function formatMessagePreview(text?: string | null): string {
   if (!text) return "";
-  if (isStickerMessage(text)) return "[Nhãn dán]";
-  return text;
+  // A reply travels as "[reply:id:name:quote]" followed by the text: the preview shows only what was written.
+  const written = parseReplyMessage(text).text;
+  if (!written && text !== written) return "Đã trả lời một tin nhắn";
+  if (isStickerMessage(written)) return "[Nhãn dán]";
+  return written;
 }

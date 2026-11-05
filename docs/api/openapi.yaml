@@ -1901,6 +1901,94 @@ paths:
         '429': {$ref: '#/components/responses/TooManyRequests'}
         '500': {$ref: '#/components/responses/ServerError'}
 
+  /conversations/{conversation}/messages/{message}/reaction:
+    parameters:
+      - {$ref: '#/components/parameters/ConversationId'}
+      - {name: message, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}
+    put:
+      tags: [Conversations]
+      operationId: reactToMessage
+      summary: React to a message
+      description: |
+        **Authentication:** required. **Authorization:** participants only; a message the caller deleted for themselves
+        or that is not in the conversation is `404`. One reaction per person and message: another emoji replaces the
+        old one. `emoji` is one of the six in `MessageReaction` (the heart is accepted with or without its variation
+        selector). A recalled message answers `409` (`message_recalled`). The answer is the message with its state.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [emoji]
+              properties:
+                emoji: {$ref: '#/components/schemas/MessageReaction'}
+      responses:
+        '200':
+          description: The message.
+          content:
+            application/json:
+              schema: {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/Message'}}}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {description: The message was recalled.}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+    delete:
+      tags: [Conversations]
+      operationId: unreactToMessage
+      summary: Take back my reaction
+      description: '**Authentication:** required. Idempotent. Same authorization and answer as `PUT`.'
+      responses:
+        '200':
+          description: The message.
+          content:
+            application/json:
+              schema: {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/Message'}}}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+
+  /conversations/{conversation}/messages/{message}:
+    parameters:
+      - {$ref: '#/components/parameters/ConversationId'}
+      - {name: message, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}
+    delete:
+      tags: [Conversations]
+      operationId: recallMessage
+      summary: Recall a message (Thu hồi)
+      description: |
+        **Authentication:** required. **Authorization:** only the sender (`403` otherwise). The text, the attachments
+        (the files are deleted) and the reactions are removed for **both** people; the message keeps its place with
+        `isRecalled: true` and `text: ""`. Idempotent.
+      responses:
+        '200':
+          description: The recalled message.
+          content:
+            application/json:
+              schema: {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/Message'}}}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+
+  /conversations/{conversation}/messages/{message}/hide:
+    parameters:
+      - {$ref: '#/components/parameters/ConversationId'}
+      - {name: message, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}
+    put:
+      tags: [Conversations]
+      operationId: hideMessage
+      summary: Delete a message for me (Xóa ở phía tôi)
+      description: |
+        **Authentication:** required. The message disappears from the caller's lists and polls only; the other person
+        still has it. Idempotent.
+      responses:
+        '204': {description: Hidden.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+
   /conversations/{conversation}/read:
     post:
       tags: [Conversations]
@@ -2681,12 +2769,21 @@ components:
       x-not-exposed:
         - "isMine (Flutter computes senderId == currentUser.id)"
         - "time (replaced by createdAt)"
-      required: [id, conversationId, senderId, text, attachments, createdAt]
+      required: [id, conversationId, senderId, text, isRecalled, reactions, myReaction, attachments, createdAt]
       properties:
         id: {$ref: '#/components/schemas/Id'}
         conversationId: {$ref: '#/components/schemas/Id'}
         senderId: {$ref: '#/components/schemas/Id'}
-        text: {type: string, maxLength: 2000, description: 'Empty (`""`) for a message that only has attachments.'}
+        text: {type: string, maxLength: 2000, description: 'Empty (`""`) for a message that only has attachments, and for a recalled one.'}
+        isRecalled: {type: boolean, description: 'The sender took the message back: no text, no attachments, no reactions.'}
+        reactions:
+          type: object
+          additionalProperties: {type: integer, minimum: 1}
+          description: 'People per reaction emoji, for example `{"😂": 1, "😡": 1}`.'
+        myReaction:
+          anyOf:
+            - $ref: '#/components/schemas/MessageReaction'
+            - type: 'null'
         attachments:
           type: array
           maxItems: 5
@@ -2901,6 +2998,9 @@ components:
         data: {type: array, items: {$ref: '#/components/schemas/Conversation'}}
         meta: {$ref: '#/components/schemas/CursorMeta'}
     MessageEnvelope: {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/Message'}}}
+    MessageReaction:
+      type: string
+      enum: ['❤️', '👍', '😂', '😮', '😢', '😡']
     MessagePage:
       type: object
       required: [data, meta]
@@ -2913,6 +3013,19 @@ components:
               required: [otherTyping]
               properties:
                 otherTyping: {type: boolean}
+                states:
+                  type: object
+                  description: 'Only with `after`: what can still change on the latest 100 messages, keyed by message id, so an open chat can follow reactions and recalls.'
+                  additionalProperties:
+                    type: object
+                    required: [reactions, myReaction, isRecalled]
+                    properties:
+                      reactions: {type: object, additionalProperties: {type: integer}}
+                      myReaction:
+                        anyOf:
+                          - $ref: '#/components/schemas/MessageReaction'
+                          - type: 'null'
+                      isRecalled: {type: boolean}
     NotificationPage:
       type: object
       required: [data, meta]

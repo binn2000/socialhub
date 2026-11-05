@@ -762,6 +762,104 @@ void main() {
     expect(adapter.requests.map((r) => r.method), ['PUT', 'DELETE']);
   });
 
+  test(
+    'reactions, recalls and deletions of a message use their endpoints',
+    () async {
+      final reacted = {
+        'id': 'm1',
+        'conversationId': 'c1',
+        'senderId': 'u2',
+        'text': 'hi',
+        'isRecalled': false,
+        'reactions': {'😂': 1},
+        'myReaction': '😂',
+        'attachments': <Object>[],
+        'createdAt': '2026-10-23T10:00:03Z',
+      };
+      adapter.routes['PUT /conversations/c1/messages/m1/reaction'] = (
+        200,
+        {'data': reacted},
+      );
+      adapter.routes['DELETE /conversations/c1/messages/m1/reaction'] = (
+        200,
+        {
+          'data': {
+            ...reacted,
+            'reactions': <String, dynamic>{},
+            'myReaction': null,
+          },
+        },
+      );
+      adapter.routes['DELETE /conversations/c1/messages/m1'] = (
+        200,
+        {
+          'data': {
+            'id': 'm1',
+            'conversationId': 'c1',
+            'senderId': 'u2',
+            'text': '',
+            'isRecalled': true,
+            'reactions': <String, dynamic>{},
+            'myReaction': null,
+            'attachments': <Object>[],
+            'createdAt': '2026-10-23T10:00:03Z',
+          },
+        },
+      );
+      adapter.routes['PUT /conversations/c1/messages/m1/hide'] = (204, null);
+      await _signedInUser(api, adapter, tokens);
+
+      final reaction = await api.reactToMessage('c1', 'm1', '😂');
+      expect(adapter.last('PUT /conversations/c1/messages/m1/reaction').data, {
+        'emoji': '😂',
+      });
+      expect(reaction?.myReaction, '😂');
+      expect(reaction?.reactions, {'😂': 1});
+
+      final taken = await api.reactToMessage('c1', 'm1', null);
+      expect(taken?.myReaction, isNull);
+
+      final recalled = await api.recallMessage('c1', 'm1');
+      expect(recalled?.isRecalled, isTrue);
+
+      await api.hideMessage('c1', 'm1');
+      expect(adapter.requests.last.method, 'PUT');
+    },
+  );
+
+  test('a poll brings what changed on messages we already have', () async {
+    adapter.routes['GET /conversations/c1/messages'] = (
+      200,
+      {
+        'data': <Object>[],
+        'meta': {
+          'nextCursor': null,
+          'hasMore': false,
+          'otherTyping': false,
+          'states': {
+            'm1': {
+              'reactions': {'😮': 2},
+              'myReaction': '😮',
+              'isRecalled': false,
+            },
+            'm2': {
+              'reactions': <String, dynamic>{},
+              'myReaction': null,
+              'isRecalled': true,
+            },
+          },
+        },
+      },
+    );
+    await _signedInUser(api, adapter, tokens);
+
+    final poll = await api.loadNewMessages('c1', afterMessageId: 'm0');
+
+    expect(poll.states['m1']?.reactions, {'😮': 2});
+    expect(poll.states['m1']?.myReaction, '😮');
+    expect(poll.states['m2']?.isRecalled, isTrue);
+  });
+
   test('a reaction is sent in the body of the like request', () async {
     adapter.routes['PUT /posts/p1/like'] = (
       200,

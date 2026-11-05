@@ -748,10 +748,50 @@ class HttpSocialApi extends SocialApi {
       typing = meta['otherTyping'] == true;
       final hasMore = meta['hasMore'] == true;
       if (!hasMore || page.isEmpty) {
-        return MessagePoll(messages: messages, otherTyping: typing);
+        return MessagePoll(
+          messages: messages,
+          otherTyping: typing,
+          states: messageStatesFromJson(meta['states']),
+        );
       }
       after = page.last.id;
     }
+  }
+
+  @override
+  Future<ChatMessage?> reactToMessage(
+    String conversationId,
+    String messageId,
+    String? emoji,
+  ) async => messageFromJson(
+    (await _request(
+          emoji == null ? 'DELETE' : 'PUT',
+          '/conversations/$conversationId/messages/$messageId/reaction',
+          data: emoji == null ? null : {'emoji': emoji},
+        ))['data']
+        as Json,
+    absoluteUrl: _absoluteUrl,
+  );
+
+  @override
+  Future<ChatMessage?> recallMessage(
+    String conversationId,
+    String messageId,
+  ) async => messageFromJson(
+    (await _request(
+          'DELETE',
+          '/conversations/$conversationId/messages/$messageId',
+        ))['data']
+        as Json,
+    absoluteUrl: _absoluteUrl,
+  );
+
+  @override
+  Future<void> hideMessage(String conversationId, String messageId) async {
+    await _request(
+      'PUT',
+      '/conversations/$conversationId/messages/$messageId/hide',
+    );
   }
 
   @override

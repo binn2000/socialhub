@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_learning/models/message.dart';
 import 'package:flutter_learning/models/user_profile.dart';
 import 'package:flutter_learning/services/api_mappers.dart';
 
@@ -171,6 +172,60 @@ void main() {
       );
     }
     expect(notificationFromJson(like('angry')).type, 'like');
+  });
+
+  test('a message carries reactions and the recalled flag', () {
+    final message = messageFromJson({
+      'id': 'm1',
+      'conversationId': 'c1',
+      'senderId': 'u1',
+      'text': 'Xin chào',
+      'isRecalled': false,
+      'reactions': {'😂': 2, '😡': 1},
+      'myReaction': '😂',
+      'attachments': <Object>[],
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+    });
+    expect(message.reactions, {'😂': 2, '😡': 1});
+    expect(message.myReaction, '😂');
+    expect(message.isRecalled, isFalse);
+
+    final recalled = message.withState(const MessageState(isRecalled: true));
+    expect(recalled.text, '');
+    expect(recalled.attachments, isEmpty);
+
+    // A server that does not know reactions yet still parses.
+    final old = messageFromJson({
+      'id': 'm2',
+      'conversationId': 'c1',
+      'senderId': 'u1',
+      'text': 'Cũ',
+      'attachments': <Object>[],
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+    });
+    expect(old.reactions, isEmpty);
+    expect(old.myReaction, isNull);
+  });
+
+  test('a conversation whose last message was recalled says so', () {
+    final conversation = conversationFromJson({
+      'id': 'c1',
+      'participant': _author(),
+      'lastMessage': {
+        'id': 'm1',
+        'conversationId': 'c1',
+        'senderId': 'u1',
+        'text': '',
+        'isRecalled': true,
+        'reactions': <String, dynamic>{},
+        'myReaction': null,
+        'attachments': <Object>[],
+        'createdAt': DateTime.now().toUtc().toIso8601String(),
+      },
+      'unreadCount': 0,
+      'updatedAt': DateTime.now().toUtc().toIso8601String(),
+    });
+    expect(conversation.lastMessage, 'Tin nhắn đã được thu hồi');
   });
 
   test('a post gets Vietnamese labels for privacy and feeling', () {

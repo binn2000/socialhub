@@ -75,6 +75,9 @@ describe("Phase 5: Notifications & Chat (Messenger)", () => {
           conversationId: "conv_123",
           senderId: "user_456",
           text: "Hẹn gặp bạn chiều nay nhé!",
+          isRecalled: false,
+          reactions: {},
+          myReaction: null,
           attachments: [],
           createdAt: "2026-11-03T11:05:00Z",
         },
@@ -95,6 +98,9 @@ describe("Phase 5: Notifications & Chat (Messenger)", () => {
         conversationId: "conv_123",
         senderId: "user_my_id",
         text: "Gửi bạn tài liệu và ảnh thiết kế",
+        isRecalled: false,
+        reactions: {},
+        myReaction: null,
         attachments: [
           {
             id: 1,
@@ -170,6 +176,12 @@ describe("Phase 5: Notifications & Chat (Messenger)", () => {
       for (const s of all) {
         expect(s.url.startsWith("https://fonts.gstatic.com/s/e/notoemoji/")).toBe(true);
       }
+    });
+
+    it("shows only what was written for a reply in a preview", () => {
+      expect(formatMessagePreview("[reply:m1:Lan:Bạn khỏe không?]\nMình khỏe")).toBe("Mình khỏe");
+      expect(formatMessagePreview("[reply:m1:Lan:Xin chào]\n[sticker:3d_haha:https://x/y.webp]")).toBe("[Nhãn dán]");
+      expect(formatMessagePreview("[reply:m1:Lan:Xin chào]\n")).toBe("Đã trả lời một tin nhắn");
     });
 
     it("formats preview for conversation snippets correctly", () => {

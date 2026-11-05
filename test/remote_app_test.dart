@@ -539,7 +539,49 @@ class _FakeRemoteApi extends SocialApi {
     return MessagePoll(
       messages: List.of(newMessages[conversationId] ?? const []),
       otherTyping: partnerTyping,
+      states: pollStates,
     );
+  }
+
+  /// What the next poll says changed on known messages.
+  var pollStates = <String, MessageState>{};
+  final messageActions = <String>[];
+
+  ChatMessage _known(String conversationId, String messageId) =>
+      (chatHistory[conversationId] ?? const <ChatMessage>[]).firstWhere(
+        (m) => m.id == messageId,
+      );
+
+  @override
+  Future<ChatMessage?> reactToMessage(
+    String conversationId,
+    String messageId,
+    String? emoji,
+  ) async {
+    messageActions.add('react:$messageId:${emoji ?? '-'}');
+    return _known(conversationId, messageId).withState(
+      MessageState(
+        reactions: emoji == null ? const {} : {emoji: 1},
+        myReaction: emoji,
+      ),
+    );
+  }
+
+  @override
+  Future<ChatMessage?> recallMessage(
+    String conversationId,
+    String messageId,
+  ) async {
+    messageActions.add('recall:$messageId');
+    return _known(
+      conversationId,
+      messageId,
+    ).withState(const MessageState(isRecalled: true));
+  }
+
+  @override
+  Future<void> hideMessage(String conversationId, String messageId) async {
+    messageActions.add('hide:$messageId');
   }
 
   /// What the next poll says about the other person typing.
@@ -2475,6 +2517,102 @@ void main() {
       // The Notifications tab is not involved.
       await tapTab(tester, notificationsTab);
       expect(find.text('Có ở đó không?'), findsNothing);
+    });
+
+    testWidgets('a reaction on a message is sent to the server', (
+      tester,
+    ) async {
+      final api = chatApi();
+      await _pump(tester, api);
+      await openChat(tester);
+
+      await tester.longPress(find.text('tin cũ'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('😂'));
+      await tester.pumpAndSettle();
+
+      expect(api.messageActions, ['react:m1:😂']);
+      expect(find.text('😂'), findsWidgets); // the badge under the message
+    });
+
+    testWidgets('recalling and deleting go through the server', (tester) async {
+      final api = _FakeRemoteApi(sessionUser: _me);
+      api.conversations = [
+        Conversation(
+          id: 'c1',
+          user: _lan,
+          lastMessage: 'tin của tôi',
+          time: '1 giờ trước',
+          unreadCount: 0,
+          messages: const [],
+        ),
+      ];
+      api.chatHistory['c1'] = [
+        msg('m1', 'tin của tôi', from: _me),
+        msg('m2', 'tin của bạn'),
+      ];
+      await _pump(tester, api);
+      await openChat(tester);
+
+      await tester.longPress(find.text('tin của tôi'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Thu hồi tin nhắn'));
+      await tester.pumpAndSettle();
+      expect(api.messageActions, ['recall:m1']);
+      expect(find.text('tin của tôi'), findsNothing); // gone for everybody
+
+      await tester.longPress(find.text('tin của bạn'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Xóa ở phía tôi'));
+      await tester.pumpAndSettle();
+      expect(api.messageActions, ['recall:m1', 'hide:m2']);
+      expect(find.text('tin của bạn'), findsNothing);
+    });
+
+    testWidgets('a reaction made by the other person shows up by polling', (
+      tester,
+    ) async {
+      final api = chatApi();
+      await _pump(tester, api);
+      await openChat(tester);
+      expect(find.text('😮'), findsNothing);
+
+      api.pollStates = {
+        'm1': const MessageState(reactions: {'😮': 2}, myReaction: null),
+      };
+      await tester.pump(const Duration(seconds: 4));
+      await tester.pump();
+
+      expect(find.text('😮'), findsWidgets);
+      expect(find.text('2'), findsWidgets);
+    });
+
+    testWidgets('a message is forwarded to another conversation', (
+      tester,
+    ) async {
+      final api = chatApi();
+      api.conversations = [
+        ...api.conversations,
+        Conversation(
+          id: 'c2',
+          user: _khang,
+          lastMessage: '',
+          time: '',
+          unreadCount: 0,
+          messages: const [],
+        ),
+      ];
+      await _pump(tester, api);
+      await openChat(tester);
+
+      await tester.longPress(find.text('tin cũ'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Chuyển tiếp'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(_khang.name));
+      await tester.pumpAndSettle();
+
+      expect(api.sentMessages, contains('c2|tin cũ'));
     });
 
     testWidgets('a conversation being read does not get an unread badge', (

@@ -18,6 +18,13 @@ import {
   Trash2,
   Forward,
   MoreHorizontal,
+  Check,
+  CheckCheck,
+  Pin,
+  PinOff,
+  Search,
+  ChevronUp,
+  ChevronDown,
 } from "lucide-react";
 import { UserAvatar } from "@/components/ui/UserAvatar";
 import { timeAgo } from "@/lib/time-ago";
@@ -36,6 +43,8 @@ import {
 import { oldestFirst } from "@/lib/messages";
 import { EmojiStickerPicker } from "./EmojiStickerPicker";
 import type { Conversation, Message, Attachment } from "@/types";
+import { applyStates, withMyReaction, type MessageState } from "@/lib/message-state";
+import { ForwardMessageModal } from "./ForwardMessageModal";
 
 interface ChatPaneProps {
   conversationId: string;
@@ -69,14 +78,8 @@ export function ChatPane({
   // Reply / Quote state
   const [replyingTo, setReplyingTo] = useState<QuotedMessage | null>(null);
 
-  // Message Reactions state: msgId -> { emoji: count }
-  const [reactionsMap, setReactionsMap] = useState<Record<string, Record<string, number>>>({});
-  // userReactions: msgId -> current emoji reacted by user
-  const [userReactions, setUserReactions] = useState<Record<string, string>>({});
-
-  // Message Action States (Unsend / Delete for me)
-  const [unsentMessageIds, setUnsentMessageIds] = useState<Set<string>>(new Set());
-  const [deletedMessageIds, setDeletedMessageIds] = useState<Set<string>>(new Set());
+  // Forward dialog: the message being forwarded.
+  const [forwarding, setForwarding] = useState<Message | null>(null);
 
   // Context Menu State
   const [contextMenu, setContextMenu] = useState<{
@@ -84,6 +87,14 @@ export function ChatPane({
     x: number;
     y: number;
   } | null>(null);
+
+  // Search state
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
+
+  // Pinned message state
+  const [pinnedMessageId, setPinnedMessageId] = useState<string | null>(null);
 
   // Lightbox
   const [viewerImages, setViewerImages] = useState<string[]>([]);
@@ -96,73 +107,62 @@ export function ChatPane({
     return () => window.removeEventListener("click", handleCloseMenu);
   }, []);
 
-  // Load / persist reactions per conversation
+  // The pinned message is remembered by this browser only (reactions, recalls and deletions are on the server).
   useEffect(() => {
     if (!conversationId) return;
     try {
-      const stored = localStorage.getItem(`chat_rx_${conversationId}`);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.reactionsMap) setReactionsMap(parsed.reactionsMap);
-        if (parsed.userReactions) setUserReactions(parsed.userReactions);
-      }
-      const storedUnsent = localStorage.getItem(`chat_unsent_${conversationId}`);
-      if (storedUnsent) {
-        setUnsentMessageIds(new Set(JSON.parse(storedUnsent)));
-      }
-      const storedDel = localStorage.getItem(`chat_del_${conversationId}`);
-      if (storedDel) {
-        setDeletedMessageIds(new Set(JSON.parse(storedDel)));
+      const storedPin = localStorage.getItem(`chat_pin_${conversationId}`);
+      if (storedPin) {
+        setPinnedMessageId(storedPin);
       }
     } catch {
       // Ignore localStorage errors
     }
   }, [conversationId]);
 
-  const handleToggleReaction = useCallback((msgId: string, emoji: string) => {
-    setUserReactions((prevUserRx) => {
-      const current = prevUserRx[msgId];
-      const nextUserRx = { ...prevUserRx };
-
-      setReactionsMap((prevRxMap) => {
-        const msgRx = { ...(prevRxMap[msgId] || {}) };
-
-        if (current === emoji) {
-          // Toggle off
-          if (msgRx[emoji] > 1) {
-            msgRx[emoji] -= 1;
-          } else {
-            delete msgRx[emoji];
-          }
-          delete nextUserRx[msgId];
+  const handleTogglePin = useCallback((msgId: string) => {
+    setPinnedMessageId((prev) => {
+      const next = prev === msgId ? null : msgId;
+      try {
+        if (next) {
+          localStorage.setItem(`chat_pin_${conversationId}`, next);
         } else {
-          // If changing from another emoji
-          if (current && msgRx[current]) {
-            if (msgRx[current] > 1) {
-              msgRx[current] -= 1;
-            } else {
-              delete msgRx[current];
-            }
-          }
-          msgRx[emoji] = (msgRx[emoji] || 0) + 1;
-          nextUserRx[msgId] = emoji;
+          localStorage.removeItem(`chat_pin_${conversationId}`);
         }
-
-        const nextMap = { ...prevRxMap, [msgId]: msgRx };
-        try {
-          localStorage.setItem(
-            `chat_rx_${conversationId}`,
-            JSON.stringify({ reactionsMap: nextMap, userReactions: nextUserRx })
-          );
-        } catch {
-          // Ignore
-        }
-        return nextMap;
-      });
-
-      return nextUserRx;
+      } catch {
+        // Ignore
+      }
+      toast.info(next ? "Đã ghim tin nhắn lên đầu cuộc trò chuyện" : "Đã bỏ ghim tin nhắn");
+      return next;
     });
-  }, [conversationId]);
+  }, [conversationId, toast]);
+
+  const replaceMessage = useCallback((updated: Message) => {
+    setMessages((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+  }, []);
+
+  const handleToggleReaction = useCallback(
+    async (msgId: string, emoji: string) => {
+      const before = messages.find((m) => m.id === msgId);
+      if (!before || before.isRecalled) return;
+      const taking = before.myReaction === emoji; // the same one again takes it back
+      replaceMessage(withMyReaction(before, taking ? null : emoji));
+
+      try {
+        const res = await clientFetch<{ data: Message }>(
+          `/api/proxy/conversations/${conversationId}/messages/${msgId}/reaction`,
+          taking
+            ? { method: "DELETE" }
+            : { method: "PUT", body: JSON.stringify({ emoji }) }
+        );
+        replaceMessage(res.data);
+      } catch {
+        replaceMessage(before);
+        toast.error("Không thể thả cảm xúc lúc này");
+      }
+    },
+    [messages, conversationId, replaceMessage, toast]
+  );
 
   const handleStartReply = useCallback((msg: Message) => {
     const isMine = msg.senderId === currentUser?.id;
@@ -192,38 +192,49 @@ export function ChatPane({
     }
   }, [toast]);
 
-  const handleUnsendMessage = useCallback((msgId: string) => {
-    setUnsentMessageIds((prev) => {
-      const next = new Set(prev).add(msgId);
+  const handleUnsendMessage = useCallback(
+    async (msgId: string) => {
       try {
-        localStorage.setItem(`chat_unsent_${conversationId}`, JSON.stringify(Array.from(next)));
+        const res = await clientFetch<{ data: Message }>(
+          `/api/proxy/conversations/${conversationId}/messages/${msgId}`,
+          { method: "DELETE" }
+        );
+        replaceMessage(res.data);
+        toast.info("Đã thu hồi tin nhắn");
       } catch {
-        // Ignore
+        toast.error("Không thể thu hồi tin nhắn lúc này");
       }
-      return next;
-    });
-    toast.info("Đã thu hồi tin nhắn");
-  }, [conversationId, toast]);
+    },
+    [conversationId, replaceMessage, toast]
+  );
 
-  const handleDeleteMessage = useCallback((msgId: string) => {
-    setDeletedMessageIds((prev) => {
-      const next = new Set(prev).add(msgId);
+  const handleDeleteMessage = useCallback(
+    async (msgId: string) => {
       try {
-        localStorage.setItem(`chat_del_${conversationId}`, JSON.stringify(Array.from(next)));
+        await clientFetch(`/api/proxy/conversations/${conversationId}/messages/${msgId}/hide`, {
+          method: "PUT",
+        });
+        setMessages((prev) => prev.filter((m) => m.id !== msgId));
+        setReplyingTo((current) => (current?.id === msgId ? null : current));
+        toast.info("Đã xóa tin nhắn ở phía bạn");
       } catch {
-        // Ignore
+        toast.error("Không thể xóa tin nhắn lúc này");
       }
-      return next;
-    });
-    toast.info("Đã xóa tin nhắn ở phía bạn");
-  }, [conversationId, toast]);
+    },
+    [conversationId, toast]
+  );
 
-  const handleForwardMessage = useCallback((msg: Message) => {
-    const parsed = parseReplyMessage(msg.text);
-    const textToForward = parsed.text || msg.text || "";
-    setInputText((prev) => (prev ? `${prev}\n${textToForward}` : textToForward));
-    toast.success("Đã đưa nội dung tin nhắn vào ô soạn thảo để chuyển tiếp");
-  }, [toast]);
+  const handleForwardMessage = useCallback(
+    (msg: Message) => {
+      const parsed = parseReplyMessage(msg.text);
+      if (!(parsed.text || msg.text)) {
+        toast.info("Chưa thể chuyển tiếp ảnh hoặc tệp");
+        return;
+      }
+      setForwarding(msg);
+    },
+    [toast]
+  );
 
   const scrollToMessage = useCallback((msgId: string) => {
     const el = document.getElementById(`msg-${msgId}`);
@@ -301,10 +312,12 @@ export function ChatPane({
 
         const res = await clientFetch<{
           data: Message[];
-          meta?: { otherTyping?: boolean };
+          meta?: { otherTyping?: boolean; states?: Record<string, MessageState> };
         }>(`/api/proxy/conversations/${conversationId}/messages${query}`);
 
         setIsPartnerTyping(Boolean(res.meta?.otherTyping));
+        // Reactions and recalls on messages we already have.
+        setMessages((prev) => applyStates(prev, res.meta?.states));
 
         if (res.data && res.data.length > 0) {
           setMessages((prev) => {
@@ -483,7 +496,49 @@ export function ChatPane({
     ? `Hoạt động ${timeAgo(participant.lastSeenAt)}`
     : "Không hoạt động";
 
-  const visibleMessages = messages.filter((m) => !deletedMessageIds.has(m.id));
+  const visibleMessages = messages;
+
+  // Search filter and matching IDs
+  const matchingMessageIds = React.useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return [];
+    return visibleMessages
+      .filter((m) => {
+        const parsed = parseReplyMessage(m.text);
+        return (parsed.text || m.text || "").toLowerCase().includes(q);
+      })
+      .map((m) => m.id);
+  }, [searchQuery, visibleMessages]);
+
+  const handlePrevMatch = () => {
+    if (matchingMessageIds.length === 0) return;
+    const nextIdx =
+      (currentMatchIndex - 1 + matchingMessageIds.length) % matchingMessageIds.length;
+    setCurrentMatchIndex(nextIdx);
+    scrollToMessage(matchingMessageIds[nextIdx]);
+  };
+
+  const handleNextMatch = () => {
+    if (matchingMessageIds.length === 0) return;
+    const nextIdx = (currentMatchIndex + 1) % matchingMessageIds.length;
+    setCurrentMatchIndex(nextIdx);
+    scrollToMessage(matchingMessageIds[nextIdx]);
+  };
+
+  const pinnedMessage = visibleMessages.find((m) => m.id === pinnedMessageId);
+
+  // Find last message sent by currentUser
+  const lastMyMessage = React.useMemo(() => {
+    for (let i = visibleMessages.length - 1; i >= 0; i--) {
+      if (
+        visibleMessages[i].senderId === currentUser?.id &&
+        !visibleMessages[i].isRecalled
+      ) {
+        return visibleMessages[i];
+      }
+    }
+    return null;
+  }, [visibleMessages, currentUser?.id]);
 
   return (
     <div
@@ -534,7 +589,113 @@ export function ChatPane({
             <div className="w-32 h-6 bg-surface-muted dark:bg-surface-dark-muted rounded animate-pulse" />
           )}
         </div>
+
+        {/* Header Right Actions */}
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => {
+              setShowSearch(!showSearch);
+              if (showSearch) setSearchQuery("");
+            }}
+            className={`p-2 rounded-xl transition cursor-pointer ${
+              showSearch
+                ? "text-brand bg-brand/10 dark:bg-brand/20"
+                : "text-appText-secondary hover:text-appText-primary dark:hover:text-white hover:bg-surface-muted dark:hover:bg-surface-dark-muted"
+            }`}
+            title="Tìm kiếm nội dung tin nhắn"
+          >
+            <Search className="w-4 h-4" />
+          </button>
+        </div>
       </div>
+
+      {/* In-Chat Search Bar */}
+      {showSearch && (
+        <div className="px-4 py-2.5 bg-surface-muted/90 dark:bg-surface-dark-muted/80 border-b border-appBorder-light dark:border-appBorder-dark flex items-center gap-2 text-xs animate-in fade-in slide-in-from-top-2 duration-150 select-none">
+          <Search className="w-4 h-4 text-appText-secondary flex-shrink-0" />
+          <input
+            type="text"
+            autoFocus
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              setCurrentMatchIndex(0);
+            }}
+            placeholder="Tìm kiếm trong cuộc trò chuyện..."
+            className="flex-1 bg-white dark:bg-surface-dark border border-appBorder-light dark:border-appBorder-dark rounded-lg px-3 py-1.5 text-xs text-appText-primary dark:text-white outline-none focus:ring-1 focus:ring-brand"
+          />
+
+          {searchQuery.trim() && (
+            <div className="flex items-center gap-1 text-[11px] text-appText-secondary flex-shrink-0">
+              <span>
+                {matchingMessageIds.length > 0
+                  ? `${currentMatchIndex + 1}/${matchingMessageIds.length}`
+                  : "Không tìm thấy"}
+              </span>
+              <button
+                type="button"
+                disabled={matchingMessageIds.length === 0}
+                onClick={handlePrevMatch}
+                className="p-1 rounded hover:bg-white dark:hover:bg-surface-dark disabled:opacity-30 cursor-pointer"
+                title="Tin nhắn trước"
+              >
+                <ChevronUp className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                disabled={matchingMessageIds.length === 0}
+                onClick={handleNextMatch}
+                className="p-1 rounded hover:bg-white dark:hover:bg-surface-dark disabled:opacity-30 cursor-pointer"
+                title="Tin nhắn tiếp theo"
+              >
+                <ChevronDown className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={() => {
+              setShowSearch(false);
+              setSearchQuery("");
+            }}
+            className="p-1 rounded-lg text-appText-secondary hover:text-appText-primary dark:hover:text-white hover:bg-white dark:hover:bg-surface-dark transition cursor-pointer"
+            title="Đóng tìm kiếm"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Pinned Message Banner */}
+      {pinnedMessage && (
+        <div className="px-4 py-2 bg-amber-500/10 dark:bg-amber-400/10 border-b border-amber-500/20 flex items-center justify-between text-xs select-none animate-in fade-in slide-in-from-top-1">
+          <div
+            onClick={() => scrollToMessage(pinnedMessage.id)}
+            className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer hover:opacity-85 transition"
+            title="Nhấp để cuộn đến tin nhắn đã ghim"
+          >
+            <Pin className="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0 fill-amber-600/30" />
+            <div className="min-w-0 flex-1">
+              <p className="font-bold text-amber-700 dark:text-amber-300 truncate text-xs">
+                Tin nhắn đã ghim ({pinnedMessage.senderId === currentUser?.id ? "Bạn" : participant?.name})
+              </p>
+              <p className="text-appText-secondary dark:text-appText-dark-secondary truncate text-[11px] mt-0.5">
+                {parseReplyMessage(pinnedMessage.text).text || pinnedMessage.text}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => handleTogglePin(pinnedMessage.id)}
+            className="p-1 text-appText-secondary hover:text-amber-600 transition rounded-full cursor-pointer ml-2"
+            title="Bỏ ghim tin nhắn"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Messages Scroll Area */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3">
@@ -561,10 +722,10 @@ export function ChatPane({
         ) : (
           visibleMessages.map((msg) => {
             const isMine = msg.senderId === currentUser?.id;
-            const isUnsent = unsentMessageIds.has(msg.id);
-            const msgRx = reactionsMap[msg.id] || {};
-            const rxEntries = Object.entries(msgRx).filter(([_, count]) => count > 0);
-            const myRx = userReactions[msg.id];
+            const isUnsent = msg.isRecalled;
+            const msgRx = msg.reactions || {};
+            const rxEntries = Object.entries(msgRx).filter(([, count]) => count > 0);
+            const myRx = msg.myReaction ?? undefined;
             const { reply: parsedReply, text: cleanText } = parseReplyMessage(msg.text);
             const sticker = parseStickerMessage(cleanText);
 
@@ -579,9 +740,32 @@ export function ChatPane({
                     <Undo2 className="w-3.5 h-3.5 opacity-60" />
                     <span>Tin nhắn đã được thu hồi</span>
                   </div>
-                  <span className="text-[10px] text-appText-secondary mt-0.5 px-2">
-                    {timeAgo(msg.createdAt)}
-                  </span>
+                  <div className="flex items-center gap-1 text-[10px] text-appText-secondary mt-0.5 px-2">
+                    <span>{timeAgo(msg.createdAt)}</span>
+                    {isMine && (
+                      msg.id === lastMyMessage?.id ? (
+                        isOnline ? (
+                          <span className="flex items-center gap-1 ml-1" title="Đã xem">
+                            <UserAvatar
+                              name={participant?.name}
+                              imageUrl={participant?.avatarUrl}
+                              size="xs"
+                              className="w-3.5 h-3.5 text-[8px]"
+                            />
+                            <span className="text-[9px] text-brand font-medium">Đã xem</span>
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-0.5 ml-0.5" title="Đã nhận">
+                            <CheckCheck className="w-3.5 h-3.5 text-brand" />
+                          </span>
+                        )
+                      ) : (
+                        <span className="flex items-center gap-0.5 ml-0.5" title="Đã gửi">
+                          <CheckCheck className="w-3.5 h-3.5 text-appText-secondary/70" />
+                        </span>
+                      )
+                    )}
+                  </div>
                 </div>
               );
             }
@@ -706,9 +890,32 @@ export function ChatPane({
                       </button>
                     )}
                   </div>
-                  <span className="text-[10px] text-appText-secondary mt-0.5 px-2">
-                    {timeAgo(msg.createdAt)}
-                  </span>
+                  <div className="flex items-center gap-1 text-[10px] text-appText-secondary mt-0.5 px-2">
+                    <span>{timeAgo(msg.createdAt)}</span>
+                    {isMine && (
+                      msg.id === lastMyMessage?.id ? (
+                        isOnline ? (
+                          <span className="flex items-center gap-1 ml-1" title="Đã xem">
+                            <UserAvatar
+                              name={participant?.name}
+                              imageUrl={participant?.avatarUrl}
+                              size="xs"
+                              className="w-3.5 h-3.5 text-[8px]"
+                            />
+                            <span className="text-[9px] text-brand font-medium">Đã xem</span>
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-0.5 ml-0.5" title="Đã nhận">
+                            <CheckCheck className="w-3.5 h-3.5 text-brand" />
+                          </span>
+                        )
+                      ) : (
+                        <span className="flex items-center gap-0.5 ml-0.5" title="Đã gửi">
+                          <CheckCheck className="w-3.5 h-3.5 text-appText-secondary/70" />
+                        </span>
+                      )
+                    )}
+                  </div>
                 </div>
               );
             }
@@ -887,9 +1094,32 @@ export function ChatPane({
                   )}
                 </div>
 
-                <span className="text-[10px] text-appText-secondary mt-1 px-1">
-                  {timeAgo(msg.createdAt)}
-                </span>
+                <div className="flex items-center gap-1 text-[10px] text-appText-secondary mt-1 px-1">
+                  <span>{timeAgo(msg.createdAt)}</span>
+                  {isMine && (
+                    msg.id === lastMyMessage?.id ? (
+                      isOnline ? (
+                        <span className="flex items-center gap-1 ml-1" title="Đã xem">
+                          <UserAvatar
+                            name={participant?.name}
+                            imageUrl={participant?.avatarUrl}
+                            size="xs"
+                            className="w-3.5 h-3.5 text-[8px]"
+                          />
+                          <span className="text-[9px] text-brand font-medium">Đã xem</span>
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-0.5 ml-0.5" title="Đã nhận">
+                          <CheckCheck className="w-3.5 h-3.5 text-brand" />
+                        </span>
+                      )
+                    ) : (
+                      <span className="flex items-center gap-0.5 ml-0.5" title="Đã gửi">
+                        <CheckCheck className="w-3.5 h-3.5 text-appText-secondary/70" />
+                      </span>
+                    )
+                  )}
+                </div>
               </div>
             );
           })
@@ -1081,6 +1311,27 @@ export function ChatPane({
             <span>Chuyển tiếp</span>
           </button>
 
+          <button
+            type="button"
+            onClick={() => {
+              handleTogglePin(contextMenu.msg.id);
+              setContextMenu(null);
+            }}
+            className="w-full px-3 py-2 text-left flex items-center gap-2 hover:bg-surface-muted dark:hover:bg-surface-dark-muted transition cursor-pointer"
+          >
+            {pinnedMessageId === contextMenu.msg.id ? (
+              <>
+                <PinOff className="w-4 h-4 text-amber-500" />
+                <span>Bỏ ghim tin nhắn</span>
+              </>
+            ) : (
+              <>
+                <Pin className="w-4 h-4 text-amber-500" />
+                <span>Ghim tin nhắn</span>
+              </>
+            )}
+          </button>
+
           <div className="h-px bg-appBorder-light dark:border-appBorder-dark my-1" />
 
           {contextMenu.msg.senderId === currentUser?.id && (
@@ -1109,6 +1360,13 @@ export function ChatPane({
             <span>Xóa ở phía tôi</span>
           </button>
         </div>
+      )}
+      {forwarding && (
+        <ForwardMessageModal
+          message={forwarding}
+          currentConversationId={conversationId}
+          onClose={() => setForwarding(null)}
+        />
       )}
     </div>
   );

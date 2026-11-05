@@ -134,7 +134,9 @@ class ConversationController extends Controller
         }
 
         $limit = (int) $request->query('limit', 30);
-        $query = Message::where('conversation_id', $c->id);
+        $query = Message::where('conversation_id', $c->id)
+            ->whereNotExists(fn ($h) => $h->selectRaw('1')->from('message_hidden')
+                ->whereColumn('message_hidden.message_id', 'messages.id')->where('message_hidden.user_id', $request->user()->id));
 
         if ($request->filled('after')) {
             $anchor = Message::where('conversation_id', $c->id)->where('id', $request->query('after'))->first() ?? abort(404);
@@ -144,8 +146,13 @@ class ConversationController extends Controller
                 ->orderBy('created_at')->orderBy('id')->limit($limit + 1)->get();
 
             return [
-                'data' => $this->presentMessages($rows->take($limit)),
-                'meta' => ['nextCursor' => null, 'hasMore' => $rows->count() > $limit, 'otherTyping' => $this->otherTyping($c, $request->user())],
+                'data' => $this->presentMessages($rows->take($limit), $request->user()),
+                'meta' => [
+                    'nextCursor' => null, 'hasMore' => $rows->count() > $limit,
+                    'otherTyping' => $this->otherTyping($c, $request->user()),
+                    // What can still change on the latest messages (reactions, recall), so an open chat can follow it.
+                    'states' => $this->recentStates($c, $request->user()),
+                ],
             ];
         }
 
@@ -162,7 +169,7 @@ class ConversationController extends Controller
         $last = $page->last();
 
         return [
-            'data' => $this->presentMessages($page),
+            'data' => $this->presentMessages($page, $request->user()),
             'meta' => [
                 'nextCursor' => $hasMore ? Cursor::encode($scope, $last->created_at->format(self::MS), $last->id) : null,
                 'hasMore' => $hasMore,
@@ -226,9 +233,10 @@ class ConversationController extends Controller
 
         Cache::forget("typing:{$c->id}:{$me->id}");
 
-        // A sticker travels as "[sticker:id:url]"; the push says what it is instead.
-        $preview = str_starts_with($text, '[sticker:') ? 'Đã gửi một nhãn dán'
-            : ($text !== '' ? Str::limit($text, 100)
+        // A reply starts with "[reply:id:name:quote]" and a sticker is "[sticker:id:url]": the push says what was written.
+        $written = trim((string) preg_replace('/^\[reply:[^:\]]+:[^:\]]*:[^\]]*\]\n?/u', '', $text));
+        $preview = str_starts_with($written, '[sticker:') ? 'Đã gửi một nhãn dán'
+            : ($written !== '' ? Str::limit($written, 100)
                 : (collect($stored)->every(fn (array $a) => $a['type'] === 'image') ? 'Đã gửi ảnh' : 'Đã gửi tệp đính kèm'));
         SendPush::dispatch($otherId, $me->name, $preview, [
             'type' => 'message',
@@ -236,7 +244,7 @@ class ConversationController extends Controller
             'actorId' => $me->id,
         ])->afterCommit();
 
-        return response()->json(['data' => $this->presentMessage($message)], 201);
+        return response()->json(['data' => $this->presentMessage($message, $me)], 201);
     }
 
     /** Stores one uploaded file and returns the attachment row to save. */
@@ -336,23 +344,45 @@ class ConversationController extends Controller
             ->where('user_low_id', min($a, $b))->where('user_high_id', max($a, $b))->exists();
     }
 
-    private function presentMessage(Message $m): array
+    private function presentMessage(Message $m, User $viewer): array
     {
-        return $this->presentMessages(collect([$m]))[0];
+        return $this->presentMessages(collect([$m]), $viewer)[0];
+    }
+
+    /** The reactions a message can get. */
+    public const REACTIONS = ['❤️', '👍', '😂', '😮', '😢', '😡'];
+
+    /** Finds the canonical emoji for what a client sent (with or without the emoji variation selector). */
+    private static function canonicalReaction(string $emoji): ?string
+    {
+        $plain = str_replace("\u{FE0F}", '', $emoji);
+
+        foreach (self::REACTIONS as $known) {
+            if (str_replace("\u{FE0F}", '', $known) === $plain) {
+                return $known;
+            }
+        }
+
+        return null;
     }
 
     /** @param Collection<int, Message> $messages */
-    private function presentMessages($messages): array
+    private function presentMessages($messages, User $viewer): array
     {
         $messages = collect($messages)->values();
         $attachments = MessageAttachment::whereIn('message_id', $messages->pluck('id'))->orderBy('id')->get()->groupBy('message_id');
+        $reactions = DB::table('message_reactions')->whereIn('message_id', $messages->pluck('id'))->get()->groupBy('message_id');
 
         return $messages->map(fn (Message $m) => [
             'id' => $m->id,
             'conversationId' => $m->conversation_id,
             'senderId' => $m->sender_id,
-            'text' => $m->text,
-            'attachments' => ($attachments[$m->id] ?? collect())->map(fn (MessageAttachment $a) => [
+            // A recalled message keeps its place but nobody can read it any more.
+            'text' => $m->recalled_at ? '' : $m->text,
+            'isRecalled' => $m->recalled_at !== null,
+            'reactions' => (object) ($reactions[$m->id] ?? collect())->countBy('emoji')->all(),
+            'myReaction' => ($reactions[$m->id] ?? collect())->firstWhere('user_id', $viewer->id)?->emoji,
+            'attachments' => $m->recalled_at ? [] : ($attachments[$m->id] ?? collect())->map(fn (MessageAttachment $a) => [
                 'id' => $a->id,
                 'type' => $a->type,
                 'url' => ImageStore::url($a->path),
@@ -366,6 +396,98 @@ class ConversationController extends Controller
         ])->all();
     }
 
+    /** @return array<string, array{reactions: object, myReaction: ?string, isRecalled: bool}> */
+    private function recentStates(Conversation $c, User $viewer): array
+    {
+        $latest = Message::where('conversation_id', $c->id)
+            ->whereNotExists(fn ($h) => $h->selectRaw('1')->from('message_hidden')
+                ->whereColumn('message_hidden.message_id', 'messages.id')->where('message_hidden.user_id', $viewer->id))
+            ->orderByDesc('created_at')->orderByDesc('id')->limit(100)->get();
+
+        $states = [];
+        foreach ($this->presentMessages($latest, $viewer) as $m) {
+            $states[$m['id']] = ['reactions' => $m['reactions'], 'myReaction' => $m['myReaction'], 'isRecalled' => $m['isRecalled']];
+        }
+
+        return $states;
+    }
+
+    /** The message of this conversation, visible to the caller (not hidden by them). */
+    private function visibleMessage(Request $request, Conversation $c, string $message, bool $evenIfHidden = false): Message
+    {
+        return Message::where('conversation_id', $c->id)->where('id', $message)
+            ->when(! $evenIfHidden, fn ($q) => $q->whereNotExists(fn ($h) => $h->selectRaw('1')->from('message_hidden')
+                ->whereColumn('message_hidden.message_id', 'messages.id')->where('message_hidden.user_id', $request->user()->id)))
+            ->first() ?? abort(404);
+    }
+
+    public function react(Request $request, string $conversation, string $message): array
+    {
+        $c = self::forParticipant($request, $conversation);
+        $m = $this->visibleMessage($request, $c, $message);
+        $data = $request->validate(['emoji' => ['required', 'string', 'max:16']]);
+
+        $emoji = self::canonicalReaction($data['emoji']);
+        if ($emoji === null) {
+            throw ValidationException::withMessages(['emoji' => [__('Choose one of the six reactions.')]]);
+        }
+        if ($m->recalled_at) {
+            abort(response()->json(['message' => __('The message was recalled.'), 'code' => 'message_recalled'], 409));
+        }
+
+        DB::table('message_reactions')->upsert(
+            [['message_id' => $m->id, 'user_id' => $request->user()->id, 'emoji' => $emoji, 'created_at' => now()]],
+            ['message_id', 'user_id'],
+            ['emoji'],
+        );
+
+        return ['data' => $this->presentMessage($m->fresh(), $request->user())];
+    }
+
+    public function unreact(Request $request, string $conversation, string $message): array
+    {
+        $c = self::forParticipant($request, $conversation);
+        $m = $this->visibleMessage($request, $c, $message);
+
+        DB::table('message_reactions')->where('message_id', $m->id)->where('user_id', $request->user()->id)->delete();
+
+        return ['data' => $this->presentMessage($m->fresh(), $request->user())];
+    }
+
+    /** "Thu hồi": only the sender; the text and files are removed for both people. */
+    public function recall(Request $request, string $conversation, string $message): array
+    {
+        $c = self::forParticipant($request, $conversation);
+        $m = $this->visibleMessage($request, $c, $message);
+
+        if ($m->sender_id !== $request->user()->id) {
+            abort(response()->json(['message' => __('You can only recall your own messages.'), 'code' => 'forbidden'], 403));
+        }
+
+        if (! $m->recalled_at) {
+            $paths = MessageAttachment::where('message_id', $m->id)->pluck('path');
+            DB::transaction(function () use ($m) {
+                DB::table('messages')->where('id', $m->id)->update(['recalled_at' => now()]);
+                MessageAttachment::where('message_id', $m->id)->delete();
+                DB::table('message_reactions')->where('message_id', $m->id)->delete();
+            });
+            $paths->each(fn (string $path) => ImageStore::deleteLater($path));
+        }
+
+        return ['data' => $this->presentMessage($m->fresh(), $request->user())];
+    }
+
+    /** "Xóa ở phía tôi": the message disappears for the caller only. */
+    public function hide(Request $request, string $conversation, string $message): JsonResponse
+    {
+        $c = self::forParticipant($request, $conversation);
+        $m = $this->visibleMessage($request, $c, $message, evenIfHidden: true);
+
+        DB::table('message_hidden')->insertOrIgnore(['message_id' => $m->id, 'user_id' => $request->user()->id, 'created_at' => now()]);
+
+        return response()->json(null, 204);
+    }
+
     /** @param Collection<int, Conversation> $conversations */
     private function presentMany($conversations, User $me): array
     {
@@ -376,7 +498,7 @@ class ConversationController extends Controller
             ->whereIn('cp.conversation_id', $ids)->where('cp.user_id', '!=', $me->id)
             ->get(['users.*', 'cp.conversation_id as conversation_id'])->keyBy('conversation_id');
 
-        $lastMessages = collect($this->presentMessages(Message::whereIn('id', $conversations->pluck('last_message_id')->filter())->get()))->keyBy('id');
+        $lastMessages = collect($this->presentMessages(Message::whereIn('id', $conversations->pluck('last_message_id')->filter())->get(), $me))->keyBy('id');
         $presence = Presence::forUsers($me, $others->values());
 
         $unread = DB::table('messages as m')

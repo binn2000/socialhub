@@ -150,6 +150,18 @@ class PushTest extends TestCase
         Queue::assertPushed(SendPush::class, fn (SendPush $job) => $job->body === 'Đã gửi một nhãn dán');
     }
 
+    public function test_a_reply_pushes_only_what_was_written(): void
+    {
+        Queue::fake([SendPush::class]);
+        [$me, $friend] = User::factory()->count(2)->create();
+        Friendship::create(['requester_id' => $me->id, 'addressee_id' => $friend->id, 'status' => 'accepted']);
+        $conversation = $this->actingAs($me, 'sanctum')->postJson('/api/v1/conversations', ['userId' => $friend->id])->json('data.id');
+
+        $this->postJson("/api/v1/conversations/$conversation/messages", ['text' => "[reply:m1:Lan:Bạn khỏe không?]\nMình khỏe"])->assertCreated();
+
+        Queue::assertPushed(SendPush::class, fn (SendPush $job) => $job->body === 'Mình khỏe');
+    }
+
     public function test_the_sender_calls_fcm_for_every_device(): void
     {
         $this->fcmOn();

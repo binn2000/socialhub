@@ -59,7 +59,14 @@ class MessagePoll {
   final List<ChatMessage> messages;
   final bool otherTyping;
 
-  const MessagePoll({this.messages = const [], this.otherTyping = false});
+  /// Reactions and recalls on messages that were already known.
+  final Map<String, MessageState> states;
+
+  const MessagePoll({
+    this.messages = const [],
+    this.otherTyping = false,
+    this.states = const {},
+  });
 }
 
 class NotificationPage {
@@ -314,6 +321,23 @@ abstract class SocialApi {
     String conversationId, {
     String? afterMessageId,
   });
+
+  /// Sets my reaction on a message (null takes it back); answers the message.
+  /// The mock app has no reactions on the server and does nothing.
+  Future<ChatMessage?> reactToMessage(
+    String conversationId,
+    String messageId,
+    String? emoji,
+  ) async => null;
+
+  /// "Thu hồi": takes my message back for both people.
+  Future<ChatMessage?> recallMessage(
+    String conversationId,
+    String messageId,
+  ) async => null;
+
+  /// "Xóa ở phía tôi": hides a message from me only.
+  Future<void> hideMessage(String conversationId, String messageId) async {}
 
   /// The conversation list again (without messages), for polling the
   /// Messages screen.

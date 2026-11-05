@@ -86,6 +86,10 @@ Route::prefix('v1')->group(function () {
         Route::put('conversations/{conversation}/typing', [ConversationController::class, 'typing']);
         Route::delete('conversations/{conversation}/typing', [ConversationController::class, 'stopTyping']);
         Route::post('conversations/{conversation}/read', [ConversationController::class, 'read']);
+        Route::put('conversations/{conversation}/messages/{message}/reaction', [ConversationController::class, 'react'])->middleware('throttle:reactions');
+        Route::delete('conversations/{conversation}/messages/{message}/reaction', [ConversationController::class, 'unreact'])->middleware('throttle:reactions');
+        Route::delete('conversations/{conversation}/messages/{message}', [ConversationController::class, 'recall'])->middleware('throttle:reactions');
+        Route::put('conversations/{conversation}/messages/{message}/hide', [ConversationController::class, 'hide'])->middleware('throttle:reactions');
 
         Route::get('stories', [StoryController::class, 'index']);
         Route::post('stories', [StoryController::class, 'store'])->middleware(['throttle:stories', 'idempotent']);

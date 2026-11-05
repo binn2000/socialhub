@@ -34,6 +34,18 @@ class MessagesScreen extends StatefulWidget {
   /// Sends a quick emoji to the author of a note (server only).
   final void Function(UserModel user, String emoji)? onReactToNote;
 
+  /// Server only, for the chat shown beside the list on a wide screen.
+  final Future<void> Function(
+    String conversationId,
+    String messageId,
+    String? emoji,
+  )?
+  onReactToMessage;
+  final Future<void> Function(String conversationId, String messageId)?
+  onRecallMessage;
+  final Future<void> Function(String conversationId, String messageId)?
+  onHideMessage;
+
   /// Searches conversations on the server by the other person's name or
   /// username, which also finds old ones that were not loaded. The results
   /// are added to [conversations]. Null on the mock app.
@@ -72,6 +84,9 @@ class MessagesScreen extends StatefulWidget {
     this.friends,
     this.onStartConversation,
     this.onReactToNote,
+    this.onReactToMessage,
+    this.onRecallMessage,
+    this.onHideMessage,
     this.onSearchConversations,
     this.notes,
     this.onSetNote,
@@ -448,6 +463,33 @@ class _MessagesScreenState extends State<MessagesScreen> {
                                   attachmentPaths: attachmentPaths,
                                 ),
                             onPickAttachment: widget.onPickAttachment,
+                            onReactToMessage: widget.onReactToMessage == null
+                                ? null
+                                : (messageId, emoji) =>
+                                      widget.onReactToMessage!(
+                                        activeId,
+                                        messageId,
+                                        emoji,
+                                      ),
+                            onRecallMessage: widget.onRecallMessage == null
+                                ? null
+                                : (messageId) => widget.onRecallMessage!(
+                                    activeId,
+                                    messageId,
+                                  ),
+                            onHideMessage: widget.onHideMessage == null
+                                ? null
+                                : (messageId) => widget.onHideMessage!(
+                                    activeId,
+                                    messageId,
+                                  ),
+                            onSendMessageTo: widget.onSendMessage == null
+                                ? null
+                                : (conversationId, text) =>
+                                      widget.onSendMessage!(
+                                        conversationId,
+                                        text,
+                                      ),
                             onTyping: widget.onTyping,
                             refresh: widget.refresh,
                             embedded: true,

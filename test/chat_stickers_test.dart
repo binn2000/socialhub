@@ -22,6 +22,23 @@ void main() {
       expect(parsed?.url, contains('1f602/512.webp'));
     });
 
+    test('a reply shows only what was written in a preview', () {
+      expect(
+        formatMessagePreview('[reply:m1:Lan:Bạn khỏe không?]\nMình khỏe'),
+        'Mình khỏe',
+      );
+      expect(
+        formatMessagePreview(
+          '[reply:m1:Lan:Xin chào]\n[sticker:3d_haha:https://x/y.webp]',
+        ),
+        '[Nhãn dán]',
+      );
+      expect(
+        formatMessagePreview('[reply:m1:Lan:Xin chào]\n'),
+        'Đã trả lời một tin nhắn',
+      );
+    });
+
     test('formats message preview for sticker messages', () {
       const stickerPayload =
           '[sticker:3d_love:https://example.com/sticker.webp]';

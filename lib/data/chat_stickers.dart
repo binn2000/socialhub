@@ -1,3 +1,5 @@
+import 'package:flutter_learning/data/chat_interactions.dart';
+
 class EmojiCategory {
   final String id;
   final String name;
@@ -621,6 +623,10 @@ ParsedSticker? parseStickerMessage(String? text) {
 
 String formatMessagePreview(String? text) {
   if (text == null || text.isEmpty) return '';
-  if (isStickerMessage(text)) return '[Nhãn dán]';
-  return text;
+  // A reply travels as "[reply:id:name:quote]" followed by the text: the
+  // preview shows only what the person wrote.
+  final written = parseChatMessageReply(text).cleanText;
+  if (written.isEmpty && text != written) return 'Đã trả lời một tin nhắn';
+  if (isStickerMessage(written)) return '[Nhãn dán]';
+  return written;
 }
