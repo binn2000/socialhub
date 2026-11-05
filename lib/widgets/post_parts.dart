@@ -448,38 +448,54 @@ class PostActionBar extends StatefulWidget {
 
 class _PostActionBarState extends State<PostActionBar> {
   PostReaction? _currentReaction;
+  OverlayEntry? _menu;
 
   @override
   void didUpdateWidget(covariant PostActionBar oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!widget.post.isLiked) {
+    // A list can hand this State to another post: the chosen reaction belongs
+    // to the old one.
+    if (!widget.post.isLiked || oldWidget.post.id != widget.post.id) {
       _currentReaction = null;
     }
+  }
+
+  @override
+  void dispose() {
+    _closeMenu();
+    super.dispose();
+  }
+
+  void _closeMenu() {
+    _menu?.remove();
+    _menu = null;
   }
 
   void _showReactionMenu(BuildContext anchorContext) {
     final renderBox = anchorContext.findRenderObject() as RenderBox?;
     if (renderBox == null) return;
 
+    _closeMenu();
     final overlay = Overlay.of(context);
     final size = renderBox.size;
     final position = renderBox.localToGlobal(Offset.zero);
     final screenWidth = MediaQuery.of(context).size.width;
 
-    late OverlayEntry entry;
-
-    entry = OverlayEntry(
+    final entry = OverlayEntry(
       builder: (ctx) => Stack(
         children: [
           Positioned.fill(
             child: GestureDetector(
               behavior: HitTestBehavior.translucent,
-              onTap: () => entry.remove(),
+              onTap: _closeMenu,
               child: const ColoredBox(color: Colors.transparent),
             ),
           ),
           Positioned(
-            left: (position.dx - 10).clamp(12.0, screenWidth - 280),
+            left: (position.dx - 10).clamp(
+              12.0,
+              (screenWidth - 280).clamp(12.0, 4000.0),
+            ),
             top: position.dy - 54 > 30
                 ? position.dy - 54
                 : position.dy + size.height + 6,
@@ -487,7 +503,7 @@ class _PostActionBarState extends State<PostActionBar> {
               color: Colors.transparent,
               child: _ReactionsBarCapsule(
                 onSelect: (reaction) {
-                  entry.remove();
+                  _closeMenu();
                   setState(() => _currentReaction = reaction);
                   if (!widget.post.isLiked) {
                     widget.onLike?.call();
@@ -501,6 +517,7 @@ class _PostActionBarState extends State<PostActionBar> {
       ),
     );
 
+    _menu = entry;
     overlay.insert(entry);
   }
 

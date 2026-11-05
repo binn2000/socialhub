@@ -86,5 +86,56 @@ void main() {
         expect(selectedRx!.label, 'Haha');
       },
     );
+
+    testWidgets(
+      'the chosen reaction does not follow the widget to another post',
+      (tester) async {
+        Post liked(String id) => Post(
+          id: id,
+          author: currentUser,
+          content: 'Bài $id',
+          createdAt: '1 giờ trước',
+          likes: 5,
+          comments: 0,
+          shares: 0,
+          isLiked: true,
+        );
+
+        Widget bar(Post post) => MaterialApp(
+          home: Scaffold(body: PostActionBar(post: post)),
+        );
+
+        await tester.pumpWidget(bar(liked('a')));
+        await tester.longPress(find.byIcon(Icons.favorite_rounded));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('😆'));
+        await tester.pumpAndSettle();
+        expect(find.text('😆'), findsOneWidget); // shown on the like button
+
+        // The same State is reused for another, also liked, post.
+        await tester.pumpWidget(bar(liked('b')));
+        expect(find.text('😆'), findsNothing);
+        expect(find.byIcon(Icons.favorite_rounded), findsOneWidget);
+      },
+    );
+
+    testWidgets('the open reactions capsule goes away with the widget', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: PostActionBar(post: testPost)),
+        ),
+      );
+      await tester.longPress(find.byIcon(Icons.favorite_border_rounded));
+      await tester.pumpAndSettle();
+      expect(find.text('😆'), findsOneWidget);
+
+      await tester.pumpWidget(
+        const MaterialApp(home: Scaffold(body: SizedBox())),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('😆'), findsNothing);
+    });
   });
 }
