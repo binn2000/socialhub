@@ -67,6 +67,9 @@ class HomeScreen extends StatefulWidget {
   /// Changes who can see one of my stories. Null on the mock app.
   final void Function(Story story, String privacy)? onChangeStoryPrivacy;
 
+  /// Sends a quick emoji to the author of a story (server only).
+  final void Function(Story story, String emoji)? onReactToStory;
+
   /// Plays the song of a story in the story viewer.
   final AudioPreview audio;
 
@@ -96,6 +99,7 @@ class HomeScreen extends StatefulWidget {
     this.onLoadTab,
     this.onDeleteStory,
     this.onChangeStoryPrivacy,
+    this.onReactToStory,
     this.audio = const NoAudioPreview(),
   });
 
@@ -117,6 +121,7 @@ class _HomeScreenState extends State<HomeScreen> {
               currentUserId: widget.currentUser.id,
               onDelete: widget.onDeleteStory,
               onChangePrivacy: widget.onChangeStoryPrivacy,
+              onReact: widget.onReactToStory,
               audio: widget.audio,
             ),
         transitionsBuilder:

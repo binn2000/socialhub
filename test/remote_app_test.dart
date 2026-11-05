@@ -211,6 +211,7 @@ class _FakeRemoteApi extends SocialApi {
   }
 
   final startedWith = <String>[];
+  final sentMessages = <String>[];
   ApiException? startError;
 
   @override
@@ -325,6 +326,7 @@ class _FakeRemoteApi extends SocialApi {
     ChatMessage draft, {
     List<String>? attachmentPaths,
   }) async {
+    sentMessages.add('$c|${draft.text}');
     final completer = sendCompleter;
     if (completer != null) return completer.future;
     return ChatMessage(
@@ -5186,11 +5188,33 @@ void main() {
     ) async {
       final api = await openMessages(tester, notes: [lanNote()]);
 
+      // The note opens a sheet first; its button starts the chat.
       await tester.tap(find.text('Đang đi cà phê ☕'));
+      await tester.pumpAndSettle();
+      expect(api.startedWith, isEmpty);
+      await tester.tap(find.text('Nhắn tin cho Lan Hương'));
       await tester.pumpAndSettle();
 
       expect(api.startedWith, ['lan']);
       expect(find.text('Nhắn tin...'), findsOneWidget);
+    });
+
+    testWidgets('a quick emoji on a friend\'s note is really sent to them', (
+      tester,
+    ) async {
+      final api = await openMessages(tester, notes: [lanNote()]);
+
+      await tester.tap(find.text('Đang đi cà phê ☕'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('🔥'));
+      await tester.pumpAndSettle();
+
+      expect(api.startedWith, ['lan']);
+      expect(api.sentMessages, [
+        'conv_lan|Đã bày tỏ cảm xúc 🔥 với ghi chú của bạn',
+      ]);
+      expect(find.text('Đã gửi cảm xúc 🔥'), findsOneWidget);
+      expect(find.text('Nhắn tin...'), findsNothing); // the chat stays closed
     });
 
     testWidgets('the notes are loaded with the app and again with Messages', (
@@ -5383,7 +5407,7 @@ void main() {
       await tester.pump();
       expect(_clipboard, 'https://music.apple.com/vn/album/x/1?i=1');
 
-      await tester.tap(find.widgetWithText(FilledButton, 'Nhắn tin'));
+      await tester.tap(find.text('Nhắn tin cho Lan Hương'));
       await tester.pumpAndSettle();
       expect(audio.stops, greaterThan(0)); // the sheet closed
       expect(api.startedWith, ['lan']);
@@ -5467,6 +5491,24 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(api.createdStories.single.track?.id, '2');
+    });
+
+    testWidgets('a quick emoji on a friend\'s story is sent to them', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..stories = [_story('s1', _lan)];
+      await _pump(tester, api);
+
+      await tester.tap(find.text('Lan'));
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump();
+      await tester.tap(find.text('😍'));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(api.sentMessages, ['conv_lan|Đã phản hồi tin của bạn: 😍']);
+      expect(find.text('Đã phản hồi tin với 😍'), findsWidgets);
+      await tester.pump(const Duration(seconds: 6));
     });
 
     testWidgets('a story plays its song in a loop, can be muted, and stops', (

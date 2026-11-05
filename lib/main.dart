@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_learning/data/chat_stickers.dart';
 import 'package:flutter_learning/models/friend_request.dart';
 import 'package:flutter_learning/models/message.dart';
 import 'package:flutter_learning/models/notification.dart';
@@ -630,11 +631,65 @@ class _MainScreenState extends State<MainScreen> {
           currentUserId: _currentUser.id,
           onDelete: _handleDeleteStory,
           onChangePrivacy: _handleStoryPrivacy,
+          onReact: widget.api.isRemote ? _reactToStory : null,
           audio: widget.audio,
         ),
       ),
     );
   }
+
+  /// Sends [text] to [friend] without opening the chat, starting the
+  /// conversation first when there is none, and says so with [confirmation].
+  Future<void> _sendQuickMessage(
+    UserModel friend,
+    String text,
+    String confirmation,
+  ) async {
+    Conversation? conversation = _conversations
+        .where((c) => c.user.id == friend.id)
+        .firstOrNull;
+    if (conversation == null) {
+      final Conversation started;
+      try {
+        started = await _guard(() => widget.api.startConversation(friend));
+      } on ApiException catch (error) {
+        if (!mounted || error.isUnauthenticated) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.displayMessage)));
+        return;
+      }
+      if (!mounted) return;
+      if (!_conversations.any((c) => c.id == started.id)) {
+        _conversations.insert(0, started);
+      }
+      setState(() {});
+      _chatChanges.value++;
+      conversation = started;
+    }
+
+    _handleSendMessage(conversation.id, text);
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(confirmation),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+  }
+
+  void _reactToNote(UserModel author, String emoji) => _sendQuickMessage(
+    author,
+    'Đã bày tỏ cảm xúc $emoji với ghi chú của bạn',
+    'Đã gửi cảm xúc $emoji',
+  );
+
+  void _reactToStory(Story story, String emoji) => _sendQuickMessage(
+    story.user,
+    'Đã phản hồi tin của bạn: $emoji',
+    'Đã phản hồi tin với $emoji',
+  );
 
   /// Changes who can see one of my stories; undone with a message if refused.
   void _handleStoryPrivacy(Story story, String privacy) {
@@ -1406,6 +1461,7 @@ class _MainScreenState extends State<MainScreen> {
       context,
       MaterialPageRoute(
         builder: (_) => MessagesScreen(
+          onReactToNote: widget.api.isRemote ? _reactToNote : null,
           conversations: _conversations,
           notes: widget.api.isRemote ? _notes : null,
           onSetNote: widget.api.isRemote ? _handleSetNote : null,
@@ -1490,7 +1546,7 @@ class _MainScreenState extends State<MainScreen> {
       }
       final preview = conversation.lastMessage.isEmpty
           ? 'đã gửi cho bạn một tin nhắn'
-          : conversation.lastMessage;
+          : formatMessagePreview(conversation.lastMessage);
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(
@@ -2095,6 +2151,7 @@ class _MainScreenState extends State<MainScreen> {
             : null,
         onDeleteStory: widget.api.isRemote ? _handleDeleteStory : null,
         onChangeStoryPrivacy: widget.api.isRemote ? _handleStoryPrivacy : null,
+        onReactToStory: widget.api.isRemote ? _reactToStory : null,
         audio: widget.audio,
       ),
       ExploreScreen(

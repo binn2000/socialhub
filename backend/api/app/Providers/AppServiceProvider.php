@@ -26,8 +26,13 @@ class AppServiceProvider extends ServiceProvider
         // MariaDB 10.1 limits index keys to 767 bytes unless the table uses ROW_FORMAT=DYNAMIC.
         Schema::defaultStringLength(191);
 
-        RateLimiter::for('login', fn (Request $r) => Limit::perMinute(5)
-            ->by(strtolower((string) $r->input('email')).'|'.$r->ip()));
+        // The email+IP key stops one client guessing a password; the two other limits stop guessing one account
+        // from many IPs and one IP trying many accounts.
+        RateLimiter::for('login', fn (Request $r) => [
+            Limit::perMinute(5)->by('pair|'.strtolower((string) $r->input('email')).'|'.$r->ip()),
+            Limit::perHour(30)->by('email|'.strtolower((string) $r->input('email'))),
+            Limit::perMinute(20)->by('ip|'.$r->ip()),
+        ]);
         RateLimiter::for('email-code', fn (Request $r) => Limit::perHour(5)->by($r->user()?->id ?: $r->ip()));
         RateLimiter::for('email-verify', fn (Request $r) => Limit::perHour(10)->by($r->user()?->id ?: $r->ip()));
         RateLimiter::for('password-forgot', fn (Request $r) => Limit::perHour(5)
@@ -43,6 +48,9 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('reports', fn (Request $r) => Limit::perHour(20)->by($r->user()?->id ?: $r->ip()));
         RateLimiter::for('music', fn (Request $r) => Limit::perMinute(30)->by($r->user()?->id ?: $r->ip()));
         RateLimiter::for('notes', fn (Request $r) => Limit::perHour(30)->by($r->user()?->id ?: $r->ip()));
+        RateLimiter::for('uploads', fn (Request $r) => Limit::perHour(30)->by($r->user()?->id ?: $r->ip()));
+        RateLimiter::for('reactions', fn (Request $r) => Limit::perMinute(90)->by($r->user()?->id ?: $r->ip()));
+        RateLimiter::for('search', fn (Request $r) => Limit::perMinute(60)->by($r->user()?->id ?: $r->ip()));
         RateLimiter::for('api', fn (Request $r) => Limit::perMinute(120)->by($r->user()?->id ?: $r->ip()));
     }
 }

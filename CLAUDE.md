@@ -71,6 +71,8 @@ dart format .                           # format
 
 ## 7. API / data layer, 8. Database
 
+**Building the APK:** run `scripts/build-apk.sh` (release APK in `build/app/outputs/flutter-apk/app-release.apk`; it uses Flutter 3.47 from `~/flutter_new` and sets `google-services.json` aside when it is not for this application id). `main()` now talks to the ngrok test server by default (`API_BASE_URL` overrides it) and only runs the offline mock with `--dart-define=USE_MOCK=true`, so a plain `flutter build apk` can no longer produce the mock app; the tests still use the mock through `SocialHubApp()`.
+
 **Flutter side today:** `lib/services/` holds `SocialApi`. `MockSocialApi` (the default, offline, no sign-in) feeds `MainScreen` synchronously from the seed data, so every pre-existing test runs unchanged. `HttpSocialApi` talks to the Laravel API and is selected by `--dart-define=API_BASE_URL=http://localhost:8000/api/v1` (Android emulator: `http://10.0.2.2:8000/api/v1`; start the server with `php artisan serve` from `backend/api` using PHP 8.5). With a server the app shows `AuthScreen` first, the token is kept in `flutter_secure_storage`, and `MainScreen` loads feed/explore/stories/users/conversations/notifications once, then re-loads when a tab is tapped more than 15 s after the last load. Changes (like, save, hide, post, story, message, profile) are applied locally at once and rolled back with a SnackBar if the server refuses; a 401 returns to sign-in. `SocialApi.isRemote` switches the few UI differences (logout button, avatar picker, real friend requests).
 
 **Photos:** with a server, Create Post, Story and Edit Profile pick real photos with `image_picker` (`MainScreen._pickPhoto`, injectable through `SocialHubApp(pickPhoto:)` for tests). The picked file path travels in `Post.imageUrl` / `Story.imageUrl`; `HttpSocialApi` uploads it as multipart when it is a local file path (not `http…` or `assets/…`), and the stored server version replaces the local draft. The mock app keeps its mock image picker.
@@ -81,7 +83,7 @@ dart format .                           # format
 
 **Also server-only:** the Home post menu has "Xóa bài viết" for your own posts (confirm dialog, optimistic removal, rolled back on failure; its notifications disappear with it). Tapping a notification opens `PostDetailScreen` (like, comments, delete if yours) for like/comment/share, or the actor's profile for friend notifications (where a request can be answered). `StoryViewerScreen.onViewed` reports each story shown (after the first frame, once per story) and `MainScreen._handleStoryViewed` sends `POST /stories/{id}/view` for other people's unseen stories; a seen story gets a grey ring.
 
-**Polling and refresh (server only):** with an open chat `MainScreen` asks `loadNewMessages(id, afterMessageId:)` every 4 s (`GET .../messages?after=`), appends only unseen ids, marks the conversation read when the other person wrote, and waits while one of our own messages is still being sent (otherwise the poll could return it before the send's answer replaces the local copy). While the Messages screen is open it re-reads `loadConversations()` every 15 s and keeps the messages already loaded; an open conversation never gets an unread badge. Both timers stop when their screen closes. `ChatScreen` and `MessagesScreen` take a `refresh` Listenable (`MainScreen._chatChanges`) because they are separate routes that the app's `setState` does not rebuild; the chat also scrolls to the newest message. Home, Explore, Friends and Notifications support pull-to-refresh (`onRefresh` → `MainScreen._refreshAll`, a full `load()`, errors shown in a SnackBar); on the mock app all of these callbacks are null.
+**Polling and refresh (server only):** with an open chat `MainScreen` asks `loadNewMessages(id, afterMessageId:)` every 4 s (`GET .../messages?after=`), appends only unseen ids, marks the conversation read when the other person wrote, and waits while one of our own messages is still being sent (otherwise the poll could return it before the send's answer replaces the local copy). The whole time the app is open (server only) `MainScreen._inboxTimer` re-reads `loadConversations()` every 10 s (`_refreshConversations`) and keeps the messages already loaded (a full `_load` keeps them too); an open conversation never gets an unread badge. The sum of the unread counts is the small number on the Messages icon of Home, and a message that arrives while another screen is open shows a SnackBar "<name>: <text>" with "Xem" (`_announceNewMessages`); messages are not notification rows, so nothing appears in the Notifications tab. The chat timer stops when the chat closes. `ChatScreen` and `MessagesScreen` take a `refresh` Listenable (`MainScreen._chatChanges`) because they are separate routes that the app's `setState` does not rebuild; the chat also scrolls to the newest message. Home, Explore, Friends and Notifications support pull-to-refresh (`onRefresh` → `MainScreen._refreshAll`, a full `load()`, errors shown in a SnackBar); on the mock app all of these callbacks are null.
 
 **Explore (server only):** the details sheet of an Explore post gets the same social actions as Home (comments via `CommentsSheet`, the shared `showShareSheet`, save/unsave with a bookmark on the tile, and the author opens the profile). The sheet is a separate route, so `ExploreScreen` bumps a `_postsVersion` notifier after each frame in which MainScreen gave it new posts, and the sheet re-reads the post and saved state from it; do not bump it inside `didUpdateWidget` directly (it marks the sheet dirty while building).
 
@@ -191,3 +193,141 @@ The app has no network, secrets, or user data handling today. Keep it that way; 
 ## Android builds need JDK 17-21
 
 Android Studio's bundled JDK is 25 here, which Gradle 8.14 rejects. Flutter is set to JDK 21 with `flutter config --jdk-dir=~/Library/Java/JavaVirtualMachines/jbr-21.0.11/Contents/Home`. `flutter build apk --debug` works (SDK at `/Volumes/Du_Lieu/android_sdk`); a debug APK was built both without and with a placeholder `google-services.json`.
+
+## 15. Web (Next.js 14 + TypeScript)
+
+The `web/` directory contains the Next.js 14 + TypeScript web version of SocialHub, mirroring the mobile app features and Vietnamese UI text.
+
+- **Architecture:** Next.js App Router serves as a secure proxy (`/api/proxy/[...path]`) to the Laravel backend (`http://localhost:8000/api/v1`).
+- **Authentication:** Sanctum token is kept strictly in an `httpOnly`, `sameSite=lax` cookie (`socialhub_token`), never exposed to client-side JavaScript.
+- **Routing & Guards:** Handled via `middleware.ts`. Unauthenticated users are redirected to `/login`, while authenticated users are redirected away from auth pages (`/login`, `/register`).
+- **Giai đoạn 1 (Nền tảng):** AppShell, Sidebar, Header, BottomNav, AuthProvider, UserAvatar, Vitest suite, OpenAPI TypeScript types (`npm run typegen`).
+- **Giai đoạn 2 (Tài khoản):**
+  - Đăng ký (`/register`): xác thực tên, username, email, mật khẩu, checkbox điều khoản.
+  - Quên mật khẩu (`/forgot-password`): 2 bước - gửi mã xác nhận 6 số đến email, sau đó nhập mã và mật khẩu mới (`/api/auth/password/*`).
+  - Xác thực email (`/verify-email`): gửi lại mã (`POST /auth/email/verification`), xác thực mã 6 số (`POST /auth/email/verify`).
+  - Banner nhắc xác thực email (`EmailVerificationBanner`): hiển thị trên `AppShell` khi `user.emailVerified === false`.
+  - Chỉnh sửa hồ sơ (`/settings/profile`): đổi ảnh đại diện (`POST /me/avatar`), ảnh bìa (`POST /me/cover`), cập nhật thông tin giới thiệu (nơi sống, quê quán, nơi làm việc, học vấn, website, sinh nhật), bật/tắt trạng thái online (`showOnlineStatus`), xóa tài khoản (`DeleteAccountModal` với mật khẩu -> `DELETE /me`).
+  - Người đã chặn (`/settings/blocked`): tải danh sách chặn (`GET /me/blocks`) và bỏ chặn (`DELETE /users/{id}/block`).
+  - Điều khoản và quyền riêng tư (`/terms`, `/privacy`): nội dung đồng bộ với `lib/data/legal_texts.dart`.
+  - Nhịp hiện diện trực tuyến (`presence` heartbeat): `AuthContext` tự động gửi `POST /me/presence` mỗi 60 giây khi `showOnlineStatus !== false`.
+- **Giai đoạn 3 (Bảng tin / Feed & Posts):**
+  - Bảng tin chính (`/` qua `FeedView`): các tab lọc bảng tin ("Dành cho bạn", "Đang theo dõi", "Đa phương tiện" - `GET /feed?filter=...`).
+  - Hàng khay tin (`StoryTray`): hiển thị danh sách story và nút "Tạo tin".
+  - Hộp tạo bài viết (`CreatePostCard`): hỗ trợ soạn thảo văn bản, đính kèm nhiều ảnh (tối đa 10 ảnh preview/xóa từng ảnh), đính kèm video (mp4/mov/webm <= 50MB), chọn quyền riêng tư (Công khai, Bạn bè, Chỉ mình tôi), chọn cảm xúc (Cảm thấy vui, Hứng thú, Hạnh phúc), gắn header `Idempotency-Key` (UUID).
+  - Thẻ bài viết (`PostCard`):
+    - Header: Avatar, tên tác giả, nhãn thời gian tương đối tiếng Việt (`timeAgo`), cảm xúc, biểu tượng quyền riêng tư.
+    - Menu bài viết: đổi quyền riêng tư (`ChangePrivacyModal`), lưu / bỏ lưu (`PUT/DELETE /posts/{id}/save`), ẩn bài viết (`PUT /posts/{id}/hide` kèm thông báo hoàn tác), xóa bài viết (`DELETE /posts/{id}`), báo cáo (`ReportModal`), chặn tác giả (`PUT /users/{id}/block`).
+    - Nội dung: tự động rút gọn khi quá dài ("Xem thêm"), bố cục lưới ảnh (1, 2, 3, 4+ ảnh với lớp phủ `+N`), trình phát video HTML5 (hỗ trợ trạng thái xử lý/thất bại).
+    - Tương tác: Thích (animation pop, cập nhật số lượng lạc quan), Bình luận (mở `CommentsModal`), Chia sẻ (sao chép liên kết clipboard kèm thông báo, `POST /posts/{id}/shares`), Lưu bài viết.
+  - Hộp thoại bình luận (`CommentsModal`): tải bình luận (`GET /posts/{id}/comments`), gửi bình luận mới (`POST /posts/{id}/comments` kèm `Idempotency-Key`), xóa bình luận (`DELETE /comments/{id}`), báo cáo bình luận.
+  - Xem ảnh phóng to (`ImageViewerModal`): lightbox toàn màn hình, chuyển ảnh trước/sau bằng chuột hoặc phím mũi tên/Esc, thu nhỏ danh sách thumbnail.
+  - Trang chi tiết bài viết (`/posts/[id]`): xem bài viết đơn lẻ từ liên kết chia sẻ hoặc thông báo.
+- **Giai đoạn 4 (Hồ sơ / Bạn bè / Profile & Friends):**
+  - Trang cá nhân (`/profile` cho tôi, `/profile/[id]` cho người khác qua `ProfileView`):
+    - Header chuẩn Modern Facebook: ảnh bìa tỉ lệ banner (`h-48 sm:h-64 md:h-72`) kèm lớp phủ gradient chân thực, nút "Đổi ảnh bìa" tinh tế ở góc dưới phải.
+    - Avatar cao cấp kích thước lớn (`2xl`: `w-32 h-32 sm:w-36 sm:h-36`) nổi 50% bằng negative margin (`-mt-16 sm:-mt-20`) kèm viền `ring-4` và bong bóng ghi chú (`Note bubble`) hướng chuẩn xác.
+    - Bố cục chống va chạm (Anti-collision): trên desktop, họ tên (`h1`), `@username`, badge "Theo dõi bạn" và các chỉ số (bạn bè, người theo dõi, đang theo dõi) nằm hoàn toàn sang bên phải của Avatar, loại bỏ 100% hiện tượng avatar che mất tên. Trên mobile, avatar và tên căn giữa thẳng hàng với khoảng đệm an toàn.
+    - Nút hành động theo quan hệ: nếu là mình ("Chỉnh sửa hồ sơ", "Bài đã lưu"); nếu là người khác ("Thêm bạn" / "Hủy lời mời" / "Chấp nhận" + "Từ chối" / "Nhắn tin" + "Bạn bè" -> "Hủy kết bạn", "Theo dõi" / "Đang theo dõi", menu "Báo cáo", "Chặn / Bỏ chặn").
+    - Bố cục 2 cột kiểu Facebook cho Tab "Bài viết" trên Desktop:
+      - Cột trái (Sidebar widget): Widget "Giới thiệu" (nơi sống, quê quán, việc làm, học vấn, website, tham gia từ), Widget "Ảnh" (lưới 6 ảnh thu nhỏ kèm nút xem tất cả mở lightbox), Widget "Bạn bè" (lưới 6 bạn bè tiêu biểu kèm avatar và liên kết).
+      - Cột phải: Hộp tạo bài viết nhanh (`CreatePostCard` khi là chủ tài khoản) và Danh sách bài viết (`PostCard`).
+    - Các tab chuyên sâu: "Bài viết", "Giới thiệu", "Ảnh" (`GET /users/{id}/photos` có badge đếm số lượng), "Bạn bè" (`GET /users/{id}/friends` có badge đếm số lượng).
+  - Trang bạn bè (`/friends`):
+    - Bộ lọc danh mục ("Tất cả mọi người", "Danh sách bạn bè", "Người bạn có thể biết").
+    - Ô tìm kiếm bạn bè / người dùng thời gian thực (debounced `GET /users?q=...`).
+    - Lời mời kết bạn (`GET /friend-requests`): chấp nhận (`POST /friend-requests/{id}/accept`), từ chối (`DELETE /friend-requests/{id}`).
+    - Người bạn có thể biết (`GET /users/suggestions`): hiển thị số lượng bạn chung, nút gửi lời mời kết bạn.
+    - Danh sách bạn bè: nhắn tin, hủy kết bạn (`DELETE /friends/{id}`).
+- **Giai đoạn 5 (Thông báo / Chat / Notifications & Messenger):**
+  - Quản lý Badge toàn cục (`BadgeContext` & `BadgeProvider`):
+    - Tự động lấy số thông báo chưa đọc (`GET /notifications/unread-count`) và tổng tin nhắn chưa đọc từ các hội thoại (`GET /conversations`).
+    - Hiển thị badge số lượng màu đỏ trên biểu tượng Thông báo, Tin nhắn ở `Header`, `Sidebar`, và `BottomNav`.
+    - Chu kỳ polling mỗi 30 giây và cập nhật lạc quan tức thì khi đọc tin nhắn/thông báo.
+  - Trang thông báo (`/notifications`):
+    - Bộ lọc tab: "Tất cả", "Tương tác", "Lời mời kết bạn".
+    - Nút "Đánh dấu tất cả đã đọc" (`POST /notifications/read`).
+    - Click vào từng thông báo: đánh dấu đã đọc (`POST /notifications/{id}/read`), điều hướng đến bài viết liên quan (`/posts/[id]`) hoặc hồ sơ người tương tác (`/profile/[id]`).
+    - Phân trang dạng cuộn / tải thêm với con trỏ cursor (`nextCursor`).
+    - Tự động định dạng icon, nhãn tiếng Việt theo loại sự kiện (`like`, `comment`, `share`, `friend_request`, `friend_accepted`, `follow`).
+  - Trang nhắn tin / Messenger (`/messages` & `/messages/[id]`):
+    - Bố cục thích ứng (responsive layout):
+      - Trên desktop: giao diện 2 cột split-view hiện đại (danh sách hội thoại bên trái, khung trò chuyện bên phải; hiển thị màn hình chờ thân thiện khi chưa chọn hội thoại).
+      - Trên mobile: danh sách hội thoại toàn màn hình; khi bấm chọn một cuộc trò chuyện sẽ chuyển mượt sang khung chat kèm nút quay lại.
+    - Hỗ trợ tham số truy vấn `?user={id}` (từ trang cá nhân hoặc danh sách bạn bè): tự động mở hoặc tạo mới cuộc hội thoại với người dùng đó (`POST /conversations`).
+    - Danh sách hội thoại (`ConversationList`): tìm kiếm thời gian thực (debounced `GET /conversations?q=...`), hiển thị tin nhắn cuối cùng, thời gian gửi, số tin nhắn chưa đọc, chỉ báo người trò chuyện đang online.
+    - Tạo cuộc trò chuyện mới (`NewConversationModal`): chọn nhanh từ danh sách bạn bè với ô tìm kiếm.
+    - Khung trò chuyện (`ChatPane`):
+      - Header: hiển thị ảnh đại diện, tên người trò chuyện, trạng thái online ("Đang hoạt động" / "Hoạt động X phút trước"), liên kết xem trang cá nhân.
+      - Tin nhắn: phân biệt rõ ràng tin nhắn của tôi vs đối phương, hiển thị thời gian gửi, nhãn trạng thái đã gửi / đã nhận.
+      - Đính kèm đa phương tiện: gửi nhiều ảnh (kèm lightbox xem phóng to), gửi file đính kèm tài liệu với kích thước và nút tải xuống.
+      - Thanh biểu cảm nhanh (quick emojis: 😊, ❤️, 👍, 🎉, 🔥, 😂, 👏, ✨).
+      - Trạng thái đang gõ (typing indicator): gửi tín hiệu gõ phím khi nhập văn bản (`PUT /conversations/{id}/typing`, tự động hủy sau 3 giây hoặc khi gửi xong `DELETE /conversations/{id}/typing`), hiển thị hiệu ứng bong bóng 3 chấm "Đang gõ..." khi đối phương soạn tin.
+      - Chu kỳ polling 4 giây cập nhật tin nhắn mới (`GET /conversations/{id}/messages?after={lastId}`) và tự động đánh dấu đã đọc (`POST /conversations/{id}/read`).
+      - Hỗ trợ header `Idempotency-Key` (UUID) chống trùng lặp tin nhắn khi mạng chập chờn.
+- **Giai đoạn 6 (Story / Nhạc / Stories & Music / Media):**
+  - Hằng số & Màu nền (`STORY_BACKGROUNDS`, `STORY_PRIVACY_OPTIONS`, `getStoryGradient`): 4 bộ dải màu gradient chuẩn (`indigo`, `sunset`, `mint`, `berry`) và 3 mức riêng tư (`friends`, `public`, `only_me`).
+  - Hộp thoại chọn nhạc nền (`TrackPickerModal`):
+    - Tìm kiếm thời gian thực bài hát theo tên hoặc nghệ sĩ trên danh mục Apple Music Việt Nam (`GET /music/search?q=...` với debounce).
+    - Nghe thử trực tiếp bản xem trước 30 giây (`previewUrl`) với nút Play/Pause.
+    - Hiển thị ảnh bìa album, tên bài hát, nghệ sĩ, và link liên kết mở ứng dụng Apple Music.
+  - Tạo Story (`/stories/create`):
+    - Khung xem trước dạng điện thoại tỷ lệ chuẩn 9:16.
+    - Hỗ trợ 2 chế độ: Story chữ trên nền dải màu gradient (4 tùy chọn màu) hoặc Story ảnh (tải ảnh lên tối đa 10MB, hỗ trợ xóa ảnh).
+    - Soạn thảo văn bản căn giữa độ tương phản cao, tối đa 500 ký tự.
+    - Đính kèm bài hát từ Apple Music (kèm nút nghe thử hoặc gỡ nhạc).
+    - Lựa chọn quyền riêng tư (Bạn bè, Công khai, Chỉ mình tôi).
+    - Đăng tin (`POST /stories` multipart hoặc json) kèm header `Idempotency-Key` (UUID).
+  - Trình xem Story tương tác (`/stories`):
+    - Tự động hiển thị toàn màn hình (fullscreen immersive view) tách biệt khỏi layout trang web thông thường.
+    - Hỗ trợ nạp toàn bộ tin đang hoạt động (`GET /stories`) hoặc tin theo người dùng (`GET /users/{id}/stories`), bắt đầu từ `?id={storyId}`.
+    - Thanh tiến trình phân đoạn (segmented progress bar): mỗi đoạn tương ứng với một story (thời lượng 5 giây).
+    - Tự động chuyển story tiếp theo khi hết giờ hoặc đóng khi xem hết.
+    - Điều khiển tiến trình: Bấm giữ chuột / chạm màn hình / giữ phím Space để tạm dừng (pause); thả tay để tiếp tục (resume).
+    - Chuyển story mượt mà: bấm vào nửa trái màn hình (hoặc mũi tên trái) để xem story trước; bấm nửa phải (hoặc mũi tên phải) để sang story sau; phím Esc để đóng.
+    - Phát nhạc nền preview 30s lặp lại khi story có đính kèm nhạc, kèm nút bật/tắt âm thanh (Mute/Unmute).
+    - Tự động đánh dấu đã xem (`POST /stories/{id}/view`).
+    - Tính năng cho người xem: Thả biểu cảm nhanh (❤️, 😂, 😮, 😢, 👏, 🔥) kèm animation hiệu ứng bay lên; nhập tin nhắn phản hồi story trực tiếp qua hội thoại Messenger (`POST /conversations/{id}/messages`).
+    - Tính năng cho chủ sở hữu tin: Đổi nhanh quyền riêng tư (`PATCH /stories/{id}`), xóa tin (`DELETE /stories/{id}`) có hộp thoại xác nhận.
+- **Giai đoạn 7 (Hoàn thiện / Polishing, Responsive, Explore/Saved, và Kiểm tra tổng thể):**
+  - Cấu hình kết nối Backend qua ngrok (`.env.local`):
+    - `BACKEND_API_URL=https://imminent-ninetieth-stark.ngrok-free.dev/api/v1`
+    - Bổ sung header `ngrok-skip-browser-warning: "true"` xuyên suốt proxy server Next.js và các endpoint auth để bypass cảnh báo ngrok miễn phí một cách liền mạch.
+  - Trang Khám phá (`/explore`):
+    - Tìm kiếm đa năng: tìm kiếm bài viết và người dùng theo từ khóa thời gian thực (debounced).
+    - Bộ lọc danh mục khám phá chuẩn: "Dành cho bạn" (`for_you`), "Đang thịnh hành" (`trending` theo lượt thích), "Video ngắn" (`short_video` chỉ lấy video đã xử lý ready).
+    - Tab chuyển đổi kết quả tìm kiếm: "Bài viết" vs "Mọi người" (thẻ người dùng hiển thị avatar, họ tên, username, nút Xem hồ sơ).
+    - Phân trang cursor mượt mà với nút "Tải thêm bài viết".
+  - Trang Bài đã lưu (`/saved`):
+    - Danh sách các bài viết đã lưu (`GET /me/saved-posts`).
+    - Bỏ lưu (`onPostSaved` -> `DELETE /posts/{id}/save`): tự động cập nhật xóa bài viết khỏi danh sách đã lưu ngay lập tức mà không cần reload trang.
+    - Màn hình rỗng (Empty state) hiện đại kèm nút dẫn sang trang Khám phá.
+  - Trang Tạo bài viết di động (`/create-post`):
+    - Phục vụ nút `+` chính giữa thanh điều hướng `BottomNav` trên thiết bị di động, tự động chuyển về trang chủ sau khi đăng bài.
+  - Micro-interactions & Kiểm tra toàn diện Responsive:
+    - Bố cục responsive hoàn hảo: Desktop (Sidebar cố định 288px, Header dính với ô tìm kiếm & badge, max-w-7xl), Mobile (BottomNav 5 nút thao tác nhanh, nút tạo bài nhô cao, Header nhỏ gọn).
+    - Hiệu ứng tương tác cao cấp: hover trên nút bấm/thẻ bài viết, animation pop khi thả tim, animation floating khi thả emoji story, hiệu ứng skeleton/loader khi tải trang.
+    - Tự động đồng bộ chế độ sáng/tối (Dark/Light Mode).
+  - Tính năng Ghi chú (Notes phong cách Facebook / Instagram Messenger):
+    - Hàng khay ghi chú (`NotesTray`): hiển thị ở đầu danh sách hội thoại Messenger (`/messages`).
+    - Ghi chú của tôi: bấm để tạo mới (`CreateNoteModal`), xem, chỉnh sửa hoặc gỡ ghi chú (`PUT/DELETE /me/note`).
+    - Bong bóng suy nghĩ (thought bubble): lơ lửng trên avatar người dùng, hiển thị nội dung ngắn tối đa 60 ký tự, tự động hết hạn sau 24 giờ.
+    - Đính kèm bài hát Apple Music: tìm kiếm bài hát (`GET /music/search`), nghe thử đoạn 30 giây trực tiếp trong popup ghi chú (`ViewNoteModal`).
+    - Phản hồi ghi chú bạn bè: nhập tin nhắn phản hồi trực tiếp từ popup, tự động gửi tin nhắn đến bạn bè qua hội thoại Messenger (`POST /conversations/{id}/messages`).
+    - Hiển thị trên Trang cá nhân (`ProfileView`): bong bóng ghi chú lơ lửng trên avatar lớn của hồ sơ cá nhân khi người đó có ghi chú hoạt động.
+- **Nâng cấp giao diện Modern Social Network (UI Polish & 3-Column Layout):**
+  - **Bố cục 3 cột chuẩn Desktop:** Tích hợp `RightSidebar` cố định trên màn hình rộng `xl+` tại Trang chủ (`/`) và Khám phá (`/explore`). Hiển thị danh sách bạn bè đang online kèm avatar & chỉ báo thời gian thực, widget "Gợi ý kết bạn" 1-click, và footer điều khoản/bản quyền.
+  - **Menu người dùng Header (Desktop User Dropdown Menu):** Bấm avatar trên Header mở menu popup cao cấp với thẻ định danh cá nhân, liên kết Hồ sơ, Bài đã lưu, Cài đặt, nút gạt Dark/Light Mode tức thì, và Đăng xuất an toàn.
+  - **Chuẩn hóa Token Hệ thống Màu 100%:** Cấu hình bảng màu ngữ nghĩa (`brand`, `brand.light`, `surface`, `appBorder`, `appText`, `like`) trong `tailwind.config.ts`. Thay thế toàn diện 1.247 class `slate-*` và `indigo-*` bằng token semantic chuẩn giúp theme Dark/Light đồng nhất và mượt mà.
+  - **Micro-interactions & Đổ bóng:** Thêm `shadow-card`, `hover:shadow-card-hover`, hoạt ảnh `animate-like-pop` và màu tim đỏ rực `text-like`, chống nháy giao diện khi tải trang (`THEME_INIT_SCRIPT`).
+  - **Hệ thống In-App Toast Notification toàn cục (`ToastContext` & `ToastContainer`):**
+    - Cung cấp hook `useToast()` với các phương thức `toast.success()`, `toast.error()`, `toast.info()`, `toast.warning()`, và `showToast(msg, undoFn)`.
+    - Giao diện nổi kính mờ cao cấp (`backdrop-blur-md`), đổ bóng sâu, hoạt ảnh trượt vào mượt mà (`animate-toast-in`), tự động biến mất sau 3 giây, hỗ trợ tối đa 4 thông báo đồng thời.
+    - Hỗ trợ nút hành động đảo ngược (Undo Action, e.g. hoàn tác ẩn bài viết) và nút đóng nhanh.
+    - Định vị thông minh: góc dưới phải trên desktop (`md:bottom-6 md:right-6`) và góc dưới màn hình trên mobile (`bottom-20`), không che thanh điều hướng `BottomNav`.
+    - Thay thế toàn diện các popup `alert()` trình duyệt và các thanh thông báo cục bộ cũ tại PostCard, ProfileView, FeedView, Friends, Notifications, Chat, Stories, Comments.
+- **Development commands:**
+  - `cd web && npm run typegen`: Cập nhật kiểu từ `docs/api/openapi.yaml`.
+  - `cd web && npm test`: Chạy toàn bộ unit test với Vitest.
+  - `cd web && npm run build`: Kiểm tra type check và build ứng dụng Next.js.
+

@@ -7,16 +7,18 @@ use App\Jobs\SendPush;
 use App\Models\Conversation;
 use App\Models\Message;
 use App\Models\MessageAttachment;
-use App\Support\ImageStore;
-use App\Support\Presence;
-use Illuminate\Support\Facades\Cache;
 use App\Models\User;
 use App\Support\Cursor;
+use App\Support\ImageStore;
 use App\Support\PostPresenter;
+use App\Support\Presence;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -224,8 +226,10 @@ class ConversationController extends Controller
 
         Cache::forget("typing:{$c->id}:{$me->id}");
 
-        $preview = $text !== '' ? Str::limit($text, 100)
-            : (collect($stored)->every(fn (array $a) => $a['type'] === 'image') ? 'Đã gửi ảnh' : 'Đã gửi tệp đính kèm');
+        // A sticker travels as "[sticker:id:url]"; the push says what it is instead.
+        $preview = str_starts_with($text, '[sticker:') ? 'Đã gửi một nhãn dán'
+            : ($text !== '' ? Str::limit($text, 100)
+                : (collect($stored)->every(fn (array $a) => $a['type'] === 'image') ? 'Đã gửi ảnh' : 'Đã gửi tệp đính kèm'));
         SendPush::dispatch($otherId, $me->name, $preview, [
             'type' => 'message',
             'conversationId' => $c->id,
@@ -337,7 +341,7 @@ class ConversationController extends Controller
         return $this->presentMessages(collect([$m]))[0];
     }
 
-    /** @param \Illuminate\Support\Collection<int, Message> $messages */
+    /** @param Collection<int, Message> $messages */
     private function presentMessages($messages): array
     {
         $messages = collect($messages)->values();
@@ -362,7 +366,7 @@ class ConversationController extends Controller
         ])->all();
     }
 
-    /** @param \Illuminate\Support\Collection<int, Conversation> $conversations */
+    /** @param Collection<int, Conversation> $conversations */
     private function presentMany($conversations, User $me): array
     {
         $ids = $conversations->pluck('id');
@@ -389,7 +393,7 @@ class ConversationController extends Controller
                 'participant' => PostPresenter::userSummary($others[$c->id]) + $presence[$others[$c->id]->id],
                 'lastMessage' => $last,
                 'unreadCount' => (int) ($unread[$c->id] ?? 0),
-                'updatedAt' => PostPresenter::timestamp(\Illuminate\Support\Carbon::parse($c->last_message_at ?? $c->created_at, 'UTC')),
+                'updatedAt' => PostPresenter::timestamp(Carbon::parse($c->last_message_at ?? $c->created_at, 'UTC')),
             ];
         })->values()->all();
     }

@@ -25,6 +25,9 @@ class StoryViewerScreen extends StatefulWidget {
   /// Changes who can see one of my stories (server only).
   final void Function(Story story, String privacy)? onChangePrivacy;
 
+  /// Reaction callback when quick emoji reaction is tapped.
+  final void Function(Story story, String emoji)? onReact;
+
   /// Plays the song of the story on show. Stories without a song are silent.
   final AudioPreview audio;
 
@@ -36,6 +39,7 @@ class StoryViewerScreen extends StatefulWidget {
     this.currentUserId,
     this.onDelete,
     this.onChangePrivacy,
+    this.onReact,
     this.audio = const NoAudioPreview(),
   });
 
@@ -49,6 +53,26 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
   late int _currentIndex;
   Timer? _autoAdvanceTimer;
   bool _muted = false;
+
+  String? _floatingEmoji;
+  Timer? _floatingTimer;
+
+  static const _quickEmojis = ['❤️', '🔥', '😂', '😮', '😢', '👏', '😍'];
+
+  void _reactWithEmoji(Story story, String emoji) {
+    _autoAdvanceTimer?.cancel();
+    setState(() {
+      _floatingEmoji = emoji;
+    });
+    _floatingTimer?.cancel();
+    _floatingTimer = Timer(const Duration(milliseconds: 1400), () {
+      if (mounted) setState(() => _floatingEmoji = null);
+    });
+
+    widget.onReact?.call(story, emoji);
+
+    _startAutoAdvance();
+  }
 
   /// Plays the song of the story on show, or silences the last one.
   void _syncAudio() {
@@ -85,6 +109,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
   void dispose() {
     widget.audio.stop();
     _autoAdvanceTimer?.cancel();
+    _floatingTimer?.cancel();
     _pageController.dispose();
     super.dispose();
   }
@@ -314,10 +339,21 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                         ],
                       ),
                     ),
+                    if (_floatingEmoji != null)
+                      Center(
+                        child: Text(
+                          _floatingEmoji!,
+                          style: const TextStyle(fontSize: 80),
+                        ),
+                      ),
                     Positioned(
                       left: 16,
                       right: 16,
-                      bottom: 32,
+                      bottom:
+                          (widget.onReact != null &&
+                              story.user.id != widget.currentUserId)
+                          ? 78
+                          : 32,
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -390,6 +426,47 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                         ],
                       ),
                     ),
+                    if (widget.onReact != null &&
+                        story.user.id != widget.currentUserId)
+                      Positioned(
+                        left: 16,
+                        right: 16,
+                        bottom: 16,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.55),
+                            borderRadius: BorderRadius.circular(24),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.2),
+                              width: 0.8,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceAround,
+                            children: [
+                              for (final emoji in _quickEmojis)
+                                InkWell(
+                                  onTap: () => _reactWithEmoji(story, emoji),
+                                  borderRadius: BorderRadius.circular(16),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 4,
+                                      vertical: 2,
+                                    ),
+                                    child: Text(
+                                      emoji,
+                                      style: const TextStyle(fontSize: 22),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
                   ],
                 );
               },

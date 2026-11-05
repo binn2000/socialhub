@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_learning/data/chat_stickers.dart';
 import 'package:flutter_learning/models/message.dart';
 import 'package:flutter_learning/models/music_track.dart';
 import 'package:flutter_learning/models/user.dart';
@@ -29,6 +30,9 @@ class MessagesScreen extends StatefulWidget {
   /// adds the "Tin nhắn mới" button; both are null on the mock app.
   final List<UserModel> Function()? friends;
   final Future<void> Function(UserModel friend)? onStartConversation;
+
+  /// Sends a quick emoji to the author of a note (server only).
+  final void Function(UserModel user, String emoji)? onReactToNote;
 
   /// Searches conversations on the server by the other person's name or
   /// username, which also finds old ones that were not loaded. The results
@@ -67,6 +71,7 @@ class MessagesScreen extends StatefulWidget {
     this.refresh,
     this.friends,
     this.onStartConversation,
+    this.onReactToNote,
     this.onSearchConversations,
     this.notes,
     this.onSetNote,
@@ -242,6 +247,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
             onSetNote: widget.onSetNote!,
             onDeleteNote: widget.onDeleteNote!,
             onReply: widget.onStartConversation!,
+            onReact: widget.onReactToNote,
             searchMusic: widget.onSearchMusic,
             audio: widget.audio,
           ),
@@ -336,7 +342,9 @@ class _MessagesScreenState extends State<MessagesScreen> {
                                     ),
                                     const SizedBox(height: 4),
                                     Text(
-                                      conversation.lastMessage,
+                                      formatMessagePreview(
+                                        conversation.lastMessage,
+                                      ),
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: TextStyle(

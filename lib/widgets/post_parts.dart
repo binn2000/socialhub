@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_learning/data/post_reactions.dart';
 import 'package:flutter_learning/models/post.dart';
 import 'package:flutter_learning/models/user.dart';
 import 'package:flutter_learning/theme/app_tokens.dart';
@@ -162,11 +163,13 @@ class PostHeader extends StatelessWidget {
 /// One compact action: icon plus count, left aligned (not a full-width
 /// button row).
 class PostAction extends StatelessWidget {
-  final IconData icon;
+  final IconData? icon;
+  final Widget? customWidget;
   final int? count;
   final String tooltip;
   final String semanticsLabel;
   final VoidCallback? onPressed;
+  final VoidCallback? onLongPress;
   final Color? color;
 
   /// Plays a small "pop" when this flips from false to true (used by like).
@@ -174,14 +177,19 @@ class PostAction extends StatelessWidget {
 
   const PostAction({
     super.key,
-    required this.icon,
+    this.icon,
+    this.customWidget,
     required this.tooltip,
     required this.semanticsLabel,
     this.count,
     this.onPressed,
+    this.onLongPress,
     this.color,
     this.active = false,
-  });
+  }) : assert(
+         icon != null || customWidget != null,
+         'Either icon or customWidget must be provided',
+       );
 
   @override
   Widget build(BuildContext context) {
@@ -193,6 +201,7 @@ class PostAction extends StatelessWidget {
         label: semanticsLabel,
         child: TextButton(
           onPressed: onPressed,
+          onLongPress: onLongPress,
           style: TextButton.styleFrom(
             foregroundColor: iconColor,
             minimumSize: const Size(36, 36),
@@ -205,7 +214,10 @@ class PostAction extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _PopIcon(icon: icon, color: iconColor, active: active),
+              if (customWidget != null)
+                _PopWidget(active: active, child: customWidget!)
+              else
+                _PopIcon(icon: icon!, color: iconColor, active: active),
               if (count != null) ...[
                 const SizedBox(width: 4),
                 AnimatedCount(
@@ -281,8 +293,134 @@ class _PopIconState extends State<_PopIcon>
   }
 }
 
+/// Scales a custom widget 1 → 1.25 → 1 whenever [active] turns on.
+class _PopWidget extends StatefulWidget {
+  final Widget child;
+  final bool active;
+
+  const _PopWidget({required this.child, required this.active});
+
+  @override
+  State<_PopWidget> createState() => _PopWidgetState();
+}
+
+class _PopWidgetState extends State<_PopWidget>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: AppMotion.slow,
+  );
+  late final Animation<double> _scale = TweenSequence<double>([
+    TweenSequenceItem(tween: Tween(begin: 1, end: 1.25), weight: 40),
+    TweenSequenceItem(tween: Tween(begin: 1.25, end: 1), weight: 60),
+  ]).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
+
+  @override
+  void didUpdateWidget(covariant _PopWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.active && !oldWidget.active) _controller.forward(from: 0);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ScaleTransition(scale: _scale, child: widget.child);
+  }
+}
+
+/// Floating reactions bar capsule (Like, Love, Haha, Wow, Sad, Angry)
+class _ReactionsBarCapsule extends StatefulWidget {
+  final ValueChanged<PostReaction> onSelect;
+  const _ReactionsBarCapsule({required this.onSelect});
+
+  @override
+  State<_ReactionsBarCapsule> createState() => _ReactionsBarCapsuleState();
+}
+
+class _ReactionsBarCapsuleState extends State<_ReactionsBarCapsule>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 200),
+  )..forward();
+
+  int? _hoveredIndex;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return ScaleTransition(
+      scale: CurvedAnimation(parent: _controller, curve: Curves.easeOutBack),
+      alignment: Alignment.bottomLeft,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF242526) : Colors.white,
+          borderRadius: BorderRadius.circular(30),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.18),
+              blurRadius: 16,
+              offset: const Offset(0, 4),
+            ),
+          ],
+          border: Border.all(
+            color: isDark ? Colors.white12 : Colors.black12,
+            width: 0.8,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: List.generate(kPostReactions.length, (index) {
+            final rx = kPostReactions[index];
+            final isHovered = _hoveredIndex == index;
+            return Tooltip(
+              message: rx.label,
+              child: GestureDetector(
+                onTap: () => widget.onSelect(rx),
+                child: MouseRegion(
+                  onEnter: (_) => setState(() => _hoveredIndex = index),
+                  onExit: (_) => setState(() => _hoveredIndex = null),
+                  child: AnimatedScale(
+                    scale: isHovered ? 1.35 : 1.0,
+                    duration: const Duration(milliseconds: 120),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 5,
+                        vertical: 4,
+                      ),
+                      child: Text(
+                        rx.emoji,
+                        style: const TextStyle(fontSize: 24),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }),
+        ),
+      ),
+    );
+  }
+}
+
 /// Like · comment · share on the left, an optional save button on the right.
-class PostActionBar extends StatelessWidget {
+/// Supports Facebook-style multi-reactions via long-press.
+class PostActionBar extends StatefulWidget {
   final Post post;
   final VoidCallback? onLike;
   final VoidCallback? onComment;
@@ -291,6 +429,7 @@ class PostActionBar extends StatelessWidget {
   /// When null the save button is not shown.
   final VoidCallback? onToggleSave;
   final bool isSaved;
+  final ValueChanged<PostReaction>? onReactionSelected;
 
   const PostActionBar({
     super.key,
@@ -300,56 +439,153 @@ class PostActionBar extends StatelessWidget {
     this.onShare,
     this.onToggleSave,
     this.isSaved = false,
+    this.onReactionSelected,
   });
+
+  @override
+  State<PostActionBar> createState() => _PostActionBarState();
+}
+
+class _PostActionBarState extends State<PostActionBar> {
+  PostReaction? _currentReaction;
+
+  @override
+  void didUpdateWidget(covariant PostActionBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.post.isLiked) {
+      _currentReaction = null;
+    }
+  }
+
+  void _showReactionMenu(BuildContext anchorContext) {
+    final renderBox = anchorContext.findRenderObject() as RenderBox?;
+    if (renderBox == null) return;
+
+    final overlay = Overlay.of(context);
+    final size = renderBox.size;
+    final position = renderBox.localToGlobal(Offset.zero);
+    final screenWidth = MediaQuery.of(context).size.width;
+
+    late OverlayEntry entry;
+
+    entry = OverlayEntry(
+      builder: (ctx) => Stack(
+        children: [
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: () => entry.remove(),
+              child: const ColoredBox(color: Colors.transparent),
+            ),
+          ),
+          Positioned(
+            left: (position.dx - 10).clamp(12.0, screenWidth - 280),
+            top: position.dy - 54 > 30
+                ? position.dy - 54
+                : position.dy + size.height + 6,
+            child: Material(
+              color: Colors.transparent,
+              child: _ReactionsBarCapsule(
+                onSelect: (reaction) {
+                  entry.remove();
+                  setState(() => _currentReaction = reaction);
+                  if (!widget.post.isLiked) {
+                    widget.onLike?.call();
+                  }
+                  widget.onReactionSelected?.call(reaction);
+                },
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    overlay.insert(entry);
+  }
+
+  void _handleLikeTap() {
+    if (widget.post.isLiked) {
+      setState(() => _currentReaction = null);
+      widget.onLike?.call();
+    } else {
+      setState(() => _currentReaction = null);
+      widget.onLike?.call();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
-    return Row(
-      mainAxisSize: onToggleSave != null ? MainAxisSize.max : MainAxisSize.min,
-      children: [
-        PostAction(
-          icon: post.isLiked
-              ? Icons.favorite_rounded
-              : Icons.favorite_border_rounded,
-          count: post.likes,
-          color: post.isLiked ? palette.like : null,
-          active: post.isLiked,
-          tooltip: post.isLiked ? 'Bỏ thích' : 'Thích bài viết',
-          semanticsLabel: post.isLiked
-              ? 'Bỏ thích bài viết, ${post.likes} lượt thích'
-              : 'Thích bài viết, ${post.likes} lượt thích',
-          onPressed: onLike,
-        ),
-        PostAction(
-          icon: Icons.chat_bubble_outline_rounded,
-          count: post.comments,
-          tooltip: 'Bình luận',
-          semanticsLabel: 'Bình luận, ${post.comments} bình luận',
-          onPressed: onComment,
-        ),
-        if (onShare != null)
-          PostAction(
-            icon: Icons.share_outlined,
-            count: post.shares,
-            tooltip: 'Chia sẻ',
-            semanticsLabel: 'Chia sẻ, ${post.shares} lượt chia sẻ',
-            onPressed: onShare,
-          ),
-        if (onToggleSave != null) ...[
-          const Spacer(),
-          PostAction(
-            icon: isSaved
-                ? Icons.bookmark_rounded
-                : Icons.bookmark_border_rounded,
-            color: isSaved ? palette.brand : null,
-            active: isSaved,
-            tooltip: isSaved ? 'Bỏ lưu bài viết' : 'Lưu bài viết',
-            semanticsLabel: isSaved ? 'Bỏ lưu bài viết' : 'Lưu bài viết',
-            onPressed: onToggleSave,
-          ),
-        ],
-      ],
+    final isLiked = widget.post.isLiked;
+    final hasCustomReaction = isLiked && _currentReaction != null;
+
+    final Color likeColor = hasCustomReaction
+        ? _currentReaction!.color
+        : palette.like;
+
+    return Builder(
+      builder: (btnContext) {
+        return Row(
+          mainAxisSize: widget.onToggleSave != null
+              ? MainAxisSize.max
+              : MainAxisSize.min,
+          children: [
+            PostAction(
+              icon: hasCustomReaction
+                  ? null
+                  : (isLiked
+                        ? Icons.favorite_rounded
+                        : Icons.favorite_border_rounded),
+              customWidget: hasCustomReaction
+                  ? Text(
+                      _currentReaction!.emoji,
+                      style: const TextStyle(fontSize: 18),
+                    )
+                  : null,
+              count: widget.post.likes,
+              color: isLiked ? likeColor : null,
+              active: isLiked,
+              tooltip: isLiked ? 'Bỏ thích' : 'Thích bài viết',
+              semanticsLabel: isLiked
+                  ? 'Bỏ thích bài viết, ${widget.post.likes} lượt thích'
+                  : 'Thích bài viết, ${widget.post.likes} lượt thích',
+              onPressed: _handleLikeTap,
+              onLongPress: () => _showReactionMenu(btnContext),
+            ),
+            PostAction(
+              icon: Icons.chat_bubble_outline_rounded,
+              count: widget.post.comments,
+              tooltip: 'Bình luận',
+              semanticsLabel: 'Bình luận, ${widget.post.comments} bình luận',
+              onPressed: widget.onComment,
+            ),
+            if (widget.onShare != null)
+              PostAction(
+                icon: Icons.share_outlined,
+                count: widget.post.shares,
+                tooltip: 'Chia sẻ',
+                semanticsLabel: 'Chia sẻ, ${widget.post.shares} lượt chia sẻ',
+                onPressed: widget.onShare,
+              ),
+            if (widget.onToggleSave != null) ...[
+              const Spacer(),
+              PostAction(
+                icon: widget.isSaved
+                    ? Icons.bookmark_rounded
+                    : Icons.bookmark_border_rounded,
+                color: widget.isSaved ? palette.brand : null,
+                active: widget.isSaved,
+                tooltip: widget.isSaved ? 'Bỏ lưu bài viết' : 'Lưu bài viết',
+                semanticsLabel: widget.isSaved
+                    ? 'Bỏ lưu bài viết'
+                    : 'Lưu bài viết',
+                onPressed: widget.onToggleSave,
+              ),
+            ],
+          ],
+        );
+      },
     );
   }
 }

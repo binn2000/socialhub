@@ -120,6 +120,20 @@ class PushTest extends TestCase
             && $job->data['type'] === 'message' && $job->data['conversationId'] === $conversation);
     }
 
+    public function test_a_sticker_pushes_as_a_sticker_not_as_its_raw_text(): void
+    {
+        Queue::fake([SendPush::class]);
+        [$me, $friend] = User::factory()->count(2)->create();
+        Friendship::create(['requester_id' => $me->id, 'addressee_id' => $friend->id, 'status' => 'accepted']);
+        $conversation = $this->actingAs($me, 'sanctum')->postJson('/api/v1/conversations', ['userId' => $friend->id])->json('data.id');
+
+        $this->postJson("/api/v1/conversations/$conversation/messages", [
+            'text' => '[sticker:3d_haha:https://fonts.gstatic.com/s/e/notoemoji/latest/1f602/512.webp]',
+        ])->assertCreated();
+
+        Queue::assertPushed(SendPush::class, fn (SendPush $job) => $job->body === 'Đã gửi một nhãn dán');
+    }
+
     public function test_the_sender_calls_fcm_for_every_device(): void
     {
         $this->fcmOn();

@@ -839,6 +839,25 @@ paths:
         '422': {$ref: '#/components/responses/ValidationFailed'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
         '500': {$ref: '#/components/responses/ServerError'}
+    delete:
+      tags: [Stories]
+      operationId: deleteStory
+      summary: "[NEW] Delete my story"
+      description: |
+        **Authentication:** required. **Authorization:** the author only (`403` for someone else's visible story,
+        `404` if not visible). Expired stories are purged automatically by a scheduled job.
+      parameters:
+        - name: story
+          in: path
+          required: true
+          schema: {$ref: '#/components/schemas/Id'}
+      responses:
+        '204': {description: Story deleted.}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '500': {$ref: '#/components/responses/ServerError'}
 
   /notes:
     get:
@@ -1710,24 +1729,6 @@ paths:
         '429': {$ref: '#/components/responses/TooManyRequests'}
         '500': {$ref: '#/components/responses/ServerError'}
 
-  /stories/{story}:
-    delete:
-      tags: [Stories]
-      operationId: deleteStory
-      summary: "[NEW] Delete my story"
-      description: |
-        **Authentication:** required. **Authorization:** the author only (`403` for someone else's visible story,
-        `404` if not visible). Expired stories are purged automatically by a scheduled job.
-      parameters:
-        - {$ref: '#/components/parameters/StoryId'}
-      responses:
-        '204': {description: Story deleted.}
-        '401': {$ref: '#/components/responses/Unauthenticated'}
-        '403': {$ref: '#/components/responses/Forbidden'}
-        '404': {$ref: '#/components/responses/NotFound'}
-        '429': {$ref: '#/components/responses/TooManyRequests'}
-        '500': {$ref: '#/components/responses/ServerError'}
-
   /stories/{story}/view:
     post:
       tags: [Stories]
@@ -2394,7 +2395,6 @@ components:
         expiresAt: {$ref: '#/components/schemas/Timestamp'}
     NoteEnvelope: {type: object, required: [data], properties: {data: {$ref: '#/components/schemas/Note'}}}
     NoteList: {type: object, required: [data], properties: {data: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/Note'}}}}
-    StoryList: {type: object, required: [data], properties: {data: {type: array, maxItems: 30, items: {$ref: '#/components/schemas/Story'}}}}
     SetNoteRequest:
       type: object
       properties:

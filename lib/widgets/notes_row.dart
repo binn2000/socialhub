@@ -22,6 +22,9 @@ class NotesRow extends StatelessWidget {
   final Future<void> Function() onDeleteNote;
   final ValueChanged<UserModel> onReply;
 
+  /// Sends a quick emoji to the author of a note (server only).
+  final void Function(UserModel user, String emoji)? onReact;
+
   /// Finding and previewing a song for a note.
   final Future<List<MusicTrack>> Function(String query)? searchMusic;
   final AudioPreview audio;
@@ -33,6 +36,7 @@ class NotesRow extends StatelessWidget {
     required this.onSetNote,
     required this.onDeleteNote,
     required this.onReply,
+    this.onReact,
     this.searchMusic,
     this.audio = const NoAudioPreview(),
   });
@@ -79,11 +83,8 @@ class NotesRow extends StatelessWidget {
               hasTrack: note.track != null,
               label: note.user.name,
               semantics:
-                  'Ghi chú của ${note.user.name}: ${_shown(note)}. Bấm để ${note.track == null ? 'nhắn tin' : 'xem'}',
-              // A note with a song opens its player; a plain one answers it.
-              onTap: () => note.track == null
-                  ? onReply(note.user)
-                  : _showNoteDetail(context, note),
+                  'Ghi chú của ${note.user.name}: ${_shown(note)}. Bấm để xem và tương tác',
+              onTap: () => _showNoteDetail(context, note),
             ),
         ],
       ),
@@ -99,20 +100,30 @@ extension on NotesRow {
   String _shown(UserNote note) => noteBubbleText(note);
 
   Future<void> _showNoteDetail(BuildContext context, UserNote note) =>
-      showNoteDetail(context, note, audio: audio, onReply: onReply);
+      showNoteDetail(
+        context,
+        note,
+        audio: audio,
+        onReply: onReply,
+        onReact: onReact,
+      );
 }
 
-/// A note with a song: who shared it, the text and a player. The song starts
-/// at once (the person asked to see it). [onReply] adds a "Nhắn tin" button.
+/// A note with quick reactions: who shared it, text, song player (if any),
+/// quick emoji reaction bar and a "Nhắn tin" button.
 Future<void> showNoteDetail(
   BuildContext context,
   UserNote note, {
   required AudioPreview audio,
   ValueChanged<UserModel>? onReply,
+  void Function(UserModel user, String emoji)? onReact,
 }) {
-  final track = note.track!;
-  // A failure to play is reported by playPreview.
-  playPreview(context, audio, track.previewUrl);
+  final track = note.track;
+  if (track != null) {
+    playPreview(context, audio, track.previewUrl);
+  }
+  const quickEmojis = ['❤️', '🔥', '😂', '😍', '🙌', '💯', '👀', '👏'];
+
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -126,32 +137,100 @@ Future<void> showNoteDetail(
           children: [
             Row(
               children: [
-                UserAvatar(imageUrl: note.user.avatarUrl, radius: 20),
+                UserAvatar(imageUrl: note.user.avatarUrl, radius: 22),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: Text(
-                    note.user.name,
-                    style: Theme.of(context).textTheme.titleMedium,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        note.user.name,
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                      Text(
+                        '@${note.user.username}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
             if (note.text.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text(note.text),
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Text(note.text, style: const TextStyle(fontSize: 15)),
+              ),
             ],
-            const SizedBox(height: 12),
-            TrackCard(track: track, audio: audio),
-            if (onReply != null) ...[
+            if (track != null) ...[
+              const SizedBox(height: 12),
+              TrackCard(track: track, audio: audio),
+            ],
+            if (onReact != null) ...[
+              const SizedBox(height: 16),
+              const Text(
+                'Thả cảm xúc nhanh',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+              ),
               const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    for (final emoji in quickEmojis)
+                      InkWell(
+                        onTap: () {
+                          Navigator.pop(sheetContext);
+                          onReact(note.user, emoji);
+                        },
+                        borderRadius: BorderRadius.circular(12),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 2,
+                          ),
+                          child: Text(
+                            emoji,
+                            style: const TextStyle(fontSize: 22),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+            if (onReply != null) ...[
+              const SizedBox(height: 12),
               SizedBox(
                 width: double.infinity,
-                child: FilledButton(
+                child: FilledButton.tonal(
                   onPressed: () {
                     Navigator.pop(sheetContext);
                     onReply(note.user);
                   },
-                  child: const Text('Nhắn tin'),
+                  child: Text('Nhắn tin cho ${note.user.name}'),
                 ),
               ),
             ],

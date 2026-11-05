@@ -35,14 +35,14 @@ Route::prefix('v1')->group(function () {
         Route::patch('me', [MeController::class, 'update']);
         Route::put('me/devices', [DeviceController::class, 'store']);
         Route::delete('me/devices', [DeviceController::class, 'destroy']);
-        Route::post('me/avatar', [MeController::class, 'setAvatar']);
+        Route::post('me/avatar', [MeController::class, 'setAvatar'])->middleware('throttle:uploads');
         Route::delete('me/avatar', [MeController::class, 'removeAvatar']);
         Route::put('me/note', [NoteController::class, 'store'])->middleware('throttle:notes');
         Route::delete('me/note', [NoteController::class, 'destroy']);
         Route::get('notes', [NoteController::class, 'index']);
         Route::get('music/search', [MusicController::class, 'search'])->middleware('throttle:music');
         Route::post('me/presence', [MeController::class, 'presence']);
-        Route::post('me/cover', [MeController::class, 'setCover']);
+        Route::post('me/cover', [MeController::class, 'setCover'])->middleware('throttle:uploads');
         Route::delete('me/cover', [MeController::class, 'removeCover']);
         Route::get('me/saved-posts', [PostController::class, 'saved']);
 
@@ -52,11 +52,11 @@ Route::prefix('v1')->group(function () {
         Route::delete('users/{user}/follow', [FollowController::class, 'destroy']);
         Route::get('users/{user}/followers', [UserController::class, 'followers']);
         Route::get('users/{user}/following', [UserController::class, 'following']);
-        Route::put('users/{user}/block', [BlockController::class, 'store']);
+        Route::put('users/{user}/block', [BlockController::class, 'store'])->middleware('throttle:friend-requests');
         Route::delete('users/{user}/block', [BlockController::class, 'destroy']);
 
-        Route::get('users', [UserController::class, 'index']);
-        Route::get('users/suggestions', [UserController::class, 'suggestions']);
+        Route::get('users', [UserController::class, 'index'])->middleware('throttle:search');
+        Route::get('users/suggestions', [UserController::class, 'suggestions'])->middleware('throttle:search');
         Route::get('users/{user}', [UserController::class, 'show']);
         Route::get('users/{user}/posts', [UserController::class, 'posts']);
         Route::get('users/{user}/friends', [UserController::class, 'friends']);
@@ -68,8 +68,8 @@ Route::prefix('v1')->group(function () {
         Route::delete('friend-requests/{friendRequest}', [FriendController::class, 'destroy']);
         Route::delete('friends/{user}', [FriendController::class, 'unfriend']);
 
-        Route::get('explore', [ExploreController::class, 'index']);
-        Route::post('posts/{post}/shares', [PostInteractionController::class, 'share']);
+        Route::get('explore', [ExploreController::class, 'index'])->middleware('throttle:search');
+        Route::post('posts/{post}/shares', [PostInteractionController::class, 'share'])->middleware('throttle:reactions');
         Route::get('posts/{post}/comments', [CommentController::class, 'index']);
         Route::post('posts/{post}/comments', [CommentController::class, 'store'])->middleware(['throttle:comments', 'idempotent']);
         Route::delete('comments/{comment}', [CommentController::class, 'destroy']);
@@ -100,11 +100,11 @@ Route::prefix('v1')->group(function () {
         Route::patch('posts/{post}', [PostController::class, 'update']);
         Route::delete('posts/{post}', [PostController::class, 'destroy']);
 
-        Route::put('posts/{post}/like', [PostInteractionController::class, 'like']);
-        Route::delete('posts/{post}/like', [PostInteractionController::class, 'unlike']);
-        Route::put('posts/{post}/save', [PostInteractionController::class, 'save']);
-        Route::delete('posts/{post}/save', [PostInteractionController::class, 'unsave']);
-        Route::put('posts/{post}/hide', [PostInteractionController::class, 'hide']);
-        Route::delete('posts/{post}/hide', [PostInteractionController::class, 'unhide']);
+        Route::put('posts/{post}/like', [PostInteractionController::class, 'like'])->middleware('throttle:reactions');
+        Route::delete('posts/{post}/like', [PostInteractionController::class, 'unlike'])->middleware('throttle:reactions');
+        Route::put('posts/{post}/save', [PostInteractionController::class, 'save'])->middleware('throttle:reactions');
+        Route::delete('posts/{post}/save', [PostInteractionController::class, 'unsave'])->middleware('throttle:reactions');
+        Route::put('posts/{post}/hide', [PostInteractionController::class, 'hide'])->middleware('throttle:reactions');
+        Route::delete('posts/{post}/hide', [PostInteractionController::class, 'unhide'])->middleware('throttle:reactions');
     });
 });

@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_learning/data/chat_stickers.dart';
 import 'package:flutter_learning/models/message.dart';
 import 'package:flutter_learning/models/user.dart';
 import 'package:flutter_learning/theme/app_tokens.dart';
@@ -50,13 +51,14 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
-  static const _quickEmojis = ['😊', '❤️', '👍', '🎉', '🔥', '😂', '👏', '✨'];
-
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final List<String> _pendingAttachmentPaths = [];
   int _shownMessageCount = 0;
-  bool _showEmojiBar = false;
+  bool _showPicker = false;
+  int _pickerTab = 0; // 0: Emojis, 1: Stickers
+  String _selectedEmojiCategoryId = 'smileys';
+  String _selectedStickerPackId = 'pack_animated_3d';
 
   Conversation get _conversation => widget.conversations.firstWhere(
     (conversation) => conversation.id == widget.conversationId,
@@ -119,7 +121,14 @@ class _ChatScreenState extends State<ChatScreen> {
     _messageController.clear();
     setState(() {
       _pendingAttachmentPaths.clear();
-      _showEmojiBar = false;
+      _showPicker = false;
+    });
+  }
+
+  void _sendSticker(StickerItem sticker) {
+    widget.onSendMessage('[sticker:${sticker.id}:${sticker.url}]');
+    setState(() {
+      _showPicker = false;
     });
   }
 
@@ -199,6 +208,63 @@ class _ChatScreenState extends State<ChatScreen> {
                         ...conversation.messages.map((message) {
                           final isMine =
                               message.senderId == widget.currentUser.id;
+                          final parsed = parseStickerMessage(message.text);
+                          final sticker = parsed == null
+                              ? null
+                              : findStickerById(parsed.id);
+                          if (parsed != null) {
+                            return Align(
+                              alignment: isMine
+                                  ? Alignment.centerRight
+                                  : Alignment.centerLeft,
+                              child: Container(
+                                margin: const EdgeInsets.only(bottom: 12),
+                                child: Column(
+                                  crossAxisAlignment: isMine
+                                      ? CrossAxisAlignment.end
+                                      : CrossAxisAlignment.start,
+                                  children: [
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(12),
+                                      child: sticker == null
+                                          ? const SizedBox(
+                                              width: 125,
+                                              height: 60,
+                                              child: Center(
+                                                child: Text('[Nhãn dán]'),
+                                              ),
+                                            )
+                                          : Image.network(
+                                              sticker.url,
+                                              width: 125,
+                                              height: 125,
+                                              fit: BoxFit.contain,
+                                              errorBuilder: (_, _, _) => const Icon(
+                                                Icons
+                                                    .sentiment_satisfied_alt_rounded,
+                                                size: 48,
+                                              ),
+                                            ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 4,
+                                      ),
+                                      child: Text(
+                                        message.time,
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          color: palette.textSecondary
+                                              .withValues(alpha: 0.7),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }
                           return Align(
                             alignment: isMine
                                 ? Alignment.centerRight
@@ -280,36 +346,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       ],
                     ),
             ),
-            if (_showEmojiBar)
-              Container(
-                height: 44,
-                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).cardColor,
-                  border: Border(
-                    top: BorderSide(color: palette.border, width: 0.5),
-                  ),
-                ),
-                child: ListView(
-                  scrollDirection: Axis.horizontal,
-                  children: [
-                    for (final emoji in _quickEmojis)
-                      InkWell(
-                        onTap: () => _insertEmoji(emoji),
-                        borderRadius: BorderRadius.circular(AppRadius.sm),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 10),
-                          child: Center(
-                            child: Text(
-                              emoji,
-                              style: const TextStyle(fontSize: 20),
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
+            if (_showPicker) _buildPicker(context),
             if (_pendingAttachmentPaths.isNotEmpty)
               Container(
                 height: 72,
@@ -385,14 +422,15 @@ class _ChatScreenState extends State<ChatScreen> {
               child: Row(
                 children: [
                   IconButton(
-                    tooltip: 'Chèn biểu tượng cảm xúc',
-                    onPressed: () =>
-                        setState(() => _showEmojiBar = !_showEmojiBar),
+                    tooltip: 'Chèn biểu tượng cảm xúc & nhãn dán',
+                    onPressed: () => setState(() => _showPicker = !_showPicker),
                     icon: Icon(
-                      _showEmojiBar
+                      _showPicker
                           ? Icons.keyboard_alt_outlined
                           : Icons.sentiment_satisfied_alt_rounded,
-                      color: colorScheme.onSurfaceVariant,
+                      color: _showPicker
+                          ? colorScheme.primary
+                          : colorScheme.onSurfaceVariant,
                     ),
                   ),
                   if (widget.onPickAttachment != null)
@@ -440,6 +478,363 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildPicker(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final palette = AppPalette.of(context);
+
+    final currentEmojiCat = kEmojiCategories.firstWhere(
+      (c) => c.id == _selectedEmojiCategoryId,
+      orElse: () => kEmojiCategories.first,
+    );
+
+    final currentStickerPack = kStickerPacks.firstWhere(
+      (p) => p.id == _selectedStickerPackId,
+      orElse: () => kStickerPacks.first,
+    );
+
+    return Container(
+      height: 290,
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        border: Border(top: BorderSide(color: palette.border, width: 0.8)),
+      ),
+      child: Column(
+        children: [
+          // Top Segment Control: Emojis vs Stickers + Close button
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(3),
+                  decoration: BoxDecoration(
+                    color: colorScheme.surfaceContainerHighest.withValues(
+                      alpha: 0.6,
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      GestureDetector(
+                        onTap: () => setState(() => _pickerTab = 0),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 150),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: _pickerTab == 0
+                                ? colorScheme.surface
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(9),
+                            boxShadow: _pickerTab == 0
+                                ? [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(
+                                        alpha: 0.08,
+                                      ),
+                                      blurRadius: 4,
+                                    ),
+                                  ]
+                                : null,
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Text('😀', style: TextStyle(fontSize: 14)),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Biểu tượng',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: _pickerTab == 0
+                                      ? FontWeight.bold
+                                      : FontWeight.w500,
+                                  color: _pickerTab == 0
+                                      ? colorScheme.primary
+                                      : colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: () => setState(() => _pickerTab = 1),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 150),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: _pickerTab == 1
+                                ? colorScheme.surface
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(9),
+                            boxShadow: _pickerTab == 1
+                                ? [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(
+                                        alpha: 0.08,
+                                      ),
+                                      blurRadius: 4,
+                                    ),
+                                  ]
+                                : null,
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Text('✨', style: TextStyle(fontSize: 14)),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Nhãn dán 3D',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: _pickerTab == 1
+                                      ? FontWeight.bold
+                                      : FontWeight.w500,
+                                  color: _pickerTab == 1
+                                      ? colorScheme.primary
+                                      : colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.close_rounded, size: 20),
+                  tooltip: 'Đóng',
+                  onPressed: () => setState(() => _showPicker = false),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1, thickness: 0.5),
+
+          // Body: Either Emoji list or Sticker packs list
+          Expanded(
+            child: _pickerTab == 0
+                ? Column(
+                    children: [
+                      // Emoji Category Selector Row
+                      SizedBox(
+                        height: 38,
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 4,
+                          ),
+                          itemCount: kEmojiCategories.length,
+                          separatorBuilder: (_, _) => const SizedBox(width: 6),
+                          itemBuilder: (context, idx) {
+                            final cat = kEmojiCategories[idx];
+                            final isSelected =
+                                cat.id == _selectedEmojiCategoryId;
+                            return GestureDetector(
+                              onTap: () => setState(
+                                () => _selectedEmojiCategoryId = cat.id,
+                              ),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: isSelected
+                                      ? colorScheme.primary.withValues(
+                                          alpha: 0.15,
+                                        )
+                                      : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      cat.icon,
+                                      style: const TextStyle(fontSize: 14),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      cat.name,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: isSelected
+                                            ? FontWeight.w600
+                                            : FontWeight.normal,
+                                        color: isSelected
+                                            ? colorScheme.primary
+                                            : colorScheme.onSurfaceVariant,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      const Divider(height: 1, thickness: 0.5),
+                      // Emojis Grid
+                      Expanded(
+                        child: GridView.builder(
+                          padding: const EdgeInsets.all(10),
+                          gridDelegate:
+                              const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 7,
+                                mainAxisSpacing: 8,
+                                crossAxisSpacing: 8,
+                              ),
+                          itemCount: currentEmojiCat.emojis.length,
+                          itemBuilder: (context, idx) {
+                            final emoji = currentEmojiCat.emojis[idx];
+                            return InkWell(
+                              onTap: () => _insertEmoji(emoji),
+                              borderRadius: BorderRadius.circular(10),
+                              child: Center(
+                                child: Text(
+                                  emoji,
+                                  style: const TextStyle(fontSize: 24),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  )
+                : Column(
+                    children: [
+                      // Sticker Packs Selector Row
+                      SizedBox(
+                        height: 42,
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 4,
+                          ),
+                          itemCount: kStickerPacks.length,
+                          separatorBuilder: (_, _) => const SizedBox(width: 8),
+                          itemBuilder: (context, idx) {
+                            final pack = kStickerPacks[idx];
+                            final isSelected =
+                                pack.id == _selectedStickerPackId;
+                            return GestureDetector(
+                              onTap: () => setState(
+                                () => _selectedStickerPackId = pack.id,
+                              ),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: isSelected
+                                      ? colorScheme.primary.withValues(
+                                          alpha: 0.15,
+                                        )
+                                      : colorScheme.surfaceContainerHighest
+                                            .withValues(alpha: 0.3),
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                    color: isSelected
+                                        ? colorScheme.primary
+                                        : Colors.transparent,
+                                    width: 1,
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      pack.icon,
+                                      style: const TextStyle(fontSize: 14),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      pack.name,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: isSelected
+                                            ? FontWeight.w700
+                                            : FontWeight.w500,
+                                        color: isSelected
+                                            ? colorScheme.primary
+                                            : colorScheme.onSurface,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      const Divider(height: 1, thickness: 0.5),
+                      // Stickers Grid
+                      Expanded(
+                        child: GridView.builder(
+                          padding: const EdgeInsets.all(12),
+                          gridDelegate:
+                              const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 4,
+                                mainAxisSpacing: 12,
+                                crossAxisSpacing: 12,
+                                childAspectRatio: 0.85,
+                              ),
+                          itemCount: currentStickerPack.stickers.length,
+                          itemBuilder: (context, idx) {
+                            final stk = currentStickerPack.stickers[idx];
+                            return InkWell(
+                              onTap: () => _sendSticker(stk),
+                              borderRadius: BorderRadius.circular(12),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Expanded(
+                                    child: Image.network(
+                                      stk.url,
+                                      fit: BoxFit.contain,
+                                      errorBuilder: (_, _, _) => const Icon(
+                                        Icons.sentiment_satisfied_alt_rounded,
+                                        size: 32,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    stk.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      color: colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+        ],
       ),
     );
   }
