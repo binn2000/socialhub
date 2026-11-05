@@ -2767,10 +2767,15 @@ components:
         - "description (Vietnamese text, composed by Flutter from `type`)"
         - "icon and iconColor (UI only, chosen by `type`)"
         - "time (replaced by createdAt)"
-      required: [id, type, actor, isRead, createdAt, postId, commentId, friendRequestId, relatedContent]
+      required: [id, type, actor, isRead, createdAt, postId, reaction, commentId, friendRequestId, relatedContent]
       properties:
         id: {$ref: '#/components/schemas/Id'}
         type: {$ref: '#/components/schemas/NotificationType'}
+        reaction:
+          anyOf:
+            - $ref: '#/components/schemas/ReactionType'
+            - type: 'null'
+          description: 'Only for `like` notifications: what the person reacted with (`like` for a plain Thích), read when the list is requested, so a changed reaction shows. `null` for other types.'
         actor: {$ref: '#/components/schemas/UserSummary'}
         isRead: {type: boolean, x-computed: readAt is not null}
         createdAt: {$ref: '#/components/schemas/Timestamp'}

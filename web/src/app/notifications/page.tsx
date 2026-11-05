@@ -209,7 +209,7 @@ export default function NotificationsPage() {
         ) : (
           <div className="divide-y divide-appBorder-light dark:divide-appBorder-dark/80">
             {notifications.map((n) => {
-              const meta = getNotificationMeta(n.type);
+              const meta = getNotificationMeta(n.type, n.reaction);
               const Icon = meta.icon;
 
               return (
@@ -232,7 +232,11 @@ export default function NotificationsPage() {
                     <div
                       className={`absolute -bottom-1 -right-1 p-1 rounded-full border-2 border-white dark:border-appBorder-dark ${meta.iconColor}`}
                     >
-                      <Icon className="w-3 h-3" />
+                      {meta.emoji ? (
+                        <span className="block w-3 h-3 text-[10px] leading-3 text-center">{meta.emoji}</span>
+                      ) : (
+                        <Icon className="w-3 h-3" />
+                      )}
                     </div>
                   </div>
 

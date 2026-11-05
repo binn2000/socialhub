@@ -141,6 +141,38 @@ void main() {
     expect(plain.reactionCounts, isEmpty);
   });
 
+  test('a like notification says what the person reacted with', () {
+    Map<String, dynamic> like(String? reaction) => {
+      'id': 'n1',
+      'type': 'like',
+      'actor': _author(),
+      'isRead': false,
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+      'postId': 'p1',
+      'reaction': reaction,
+      'commentId': null,
+      'friendRequestId': null,
+      'relatedContent': null,
+    };
+
+    expect(
+      notificationFromJson(like('love')).description,
+      'đã bày tỏ cảm xúc ❤️ về bài viết của bạn',
+    );
+    expect(
+      notificationFromJson(like('haha')).description,
+      'đã bày tỏ cảm xúc 😆 về bài viết của bạn',
+    );
+    // A plain like, an unknown reaction and no reaction keep the old text.
+    for (final plain in ['like', 'something_new', null]) {
+      expect(
+        notificationFromJson(like(plain)).description,
+        'đã thích bài viết của bạn',
+      );
+    }
+    expect(notificationFromJson(like('angry')).type, 'like');
+  });
+
   test('a post gets Vietnamese labels for privacy and feeling', () {
     final post = postFromJson({
       'id': 'p1',

@@ -1938,6 +1938,8 @@ export interface components {
         Notification: {
             id: components["schemas"]["Id"];
             type: components["schemas"]["NotificationType"];
+            /** @description Only for `like` notifications: what the person reacted with (`like` for a plain Thích), read when the list is requested, so a changed reaction shows. `null` for other types. */
+            reaction: components["schemas"]["ReactionType"] | null;
             actor: components["schemas"]["UserSummary"];
             isRead: boolean;
             createdAt: components["schemas"]["Timestamp"];

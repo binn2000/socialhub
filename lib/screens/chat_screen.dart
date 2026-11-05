@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_learning/data/chat_interactions.dart';
 import 'package:flutter_learning/data/chat_stickers.dart';
 import 'package:flutter_learning/models/message.dart';
 import 'package:flutter_learning/models/user.dart';
@@ -60,6 +61,18 @@ class _ChatScreenState extends State<ChatScreen> {
   String _selectedEmojiCategoryId = 'smileys';
   String _selectedStickerPackId = 'pack_animated_3d';
 
+  // Reply / Quote state
+  QuotedMessage? _replyingTo;
+
+  // Reactions state: messageId -> { emoji: count }
+  final Map<String, Map<String, int>> _messageReactions = {};
+  // userReactions: messageId -> myEmoji
+  final Map<String, String> _userReactions = {};
+
+  // Unsent and deleted message tracking
+  final Set<String> _unsentMessageIds = {};
+  final Set<String> _deletedMessageIds = {};
+
   Conversation get _conversation => widget.conversations.firstWhere(
     (conversation) => conversation.id == widget.conversationId,
     orElse: () => widget.conversations.first,
@@ -109,26 +122,241 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  void _toggleReaction(String msgId, String emoji) {
+    setState(() {
+      final currentMyRx = _userReactions[msgId];
+      final rxMap = _messageReactions[msgId] ?? <String, int>{};
+
+      if (currentMyRx == emoji) {
+        // Remove reaction
+        if ((rxMap[emoji] ?? 0) > 1) {
+          rxMap[emoji] = rxMap[emoji]! - 1;
+        } else {
+          rxMap.remove(emoji);
+        }
+        _userReactions.remove(msgId);
+      } else {
+        // Change from previous emoji
+        if (currentMyRx != null && (rxMap[currentMyRx] ?? 0) > 0) {
+          if (rxMap[currentMyRx]! > 1) {
+            rxMap[currentMyRx] = rxMap[currentMyRx]! - 1;
+          } else {
+            rxMap.remove(currentMyRx);
+          }
+        }
+        rxMap[emoji] = (rxMap[emoji] ?? 0) + 1;
+        _userReactions[msgId] = emoji;
+      }
+      _messageReactions[msgId] = rxMap;
+    });
+  }
+
+  void _startReply(ChatMessage message, String senderName) {
+    final parsed = parseChatMessageReply(message.text);
+    final isSticker = parseStickerMessage(parsed.cleanText) != null;
+    final snippet = isSticker
+        ? '[Nhãn dán 3D]'
+        : (parsed.cleanText.isNotEmpty
+              ? parsed.cleanText
+              : (message.attachments.isNotEmpty
+                    ? '[Tệp tin/Ảnh]'
+                    : 'Tin nhắn'));
+
+    setState(() {
+      _replyingTo = QuotedMessage(
+        id: message.id,
+        senderName: senderName,
+        text: snippet,
+      );
+    });
+  }
+
+  void _showMessageActionSheet(
+    BuildContext context,
+    ChatMessage message,
+    String senderName,
+    bool isMine,
+  ) {
+    final parsed = parseChatMessageReply(message.text);
+    final cleanText = parsed.cleanText;
+    final colorScheme = Theme.of(context).colorScheme;
+    final myRx = _userReactions[message.id];
+
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 12),
+              // Reaction Bar
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: colorScheme.surfaceContainerHighest.withValues(
+                      alpha: 0.5,
+                    ),
+                    borderRadius: BorderRadius.circular(30),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: kChatMessageReactions.map((emoji) {
+                      final isSelected = myRx == emoji;
+                      return InkWell(
+                        onTap: () {
+                          Navigator.pop(sheetContext);
+                          _toggleReaction(message.id, emoji);
+                        },
+                        borderRadius: BorderRadius.circular(20),
+                        child: Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: isSelected
+                              ? BoxDecoration(
+                                  color: colorScheme.primary.withValues(
+                                    alpha: 0.15,
+                                  ),
+                                  shape: BoxShape.circle,
+                                )
+                              : null,
+                          child: Text(
+                            emoji,
+                            style: const TextStyle(fontSize: 26),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Divider(height: 1),
+              ListTile(
+                leading: Icon(Icons.reply_rounded, color: colorScheme.primary),
+                title: const Text('Trả lời tin nhắn'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _startReply(message, senderName);
+                },
+              ),
+              if (cleanText.isNotEmpty)
+                ListTile(
+                  leading: const Icon(Icons.copy_rounded),
+                  title: const Text('Sao chép văn bản'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    Clipboard.setData(ClipboardData(text: cleanText));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Đã sao chép tin nhắn'),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                ),
+              ListTile(
+                leading: const Icon(Icons.forward_rounded),
+                title: const Text('Chuyển tiếp'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  if (cleanText.isNotEmpty) {
+                    _messageController.text = cleanText;
+                  }
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Đã đưa nội dung vào ô soạn thảo để chuyển tiếp',
+                      ),
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                },
+              ),
+              if (isMine)
+                ListTile(
+                  leading: const Icon(Icons.undo_rounded, color: Colors.amber),
+                  title: const Text('Thu hồi tin nhắn'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    setState(() {
+                      _unsentMessageIds.add(message.id);
+                    });
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Đã thu hồi tin nhắn'),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                ),
+              ListTile(
+                leading: const Icon(
+                  Icons.delete_outline_rounded,
+                  color: Colors.red,
+                ),
+                title: const Text(
+                  'Xóa ở phía tôi',
+                  style: TextStyle(color: Colors.red),
+                ),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  setState(() {
+                    _deletedMessageIds.add(message.id);
+                  });
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Đã xóa tin nhắn ở phía bạn'),
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   void _sendMessage() {
     final text = _messageController.text.trim();
     if (text.isEmpty && _pendingAttachmentPaths.isEmpty) return;
 
     final attachments = List<String>.from(_pendingAttachmentPaths);
+    final finalPayload = _replyingTo != null && text.isNotEmpty
+        ? buildChatMessageReplyPayload(_replyingTo!, text)
+        : text;
+
     widget.onSendMessage(
-      text,
+      finalPayload,
       attachmentPaths: attachments.isEmpty ? null : attachments,
     );
     _messageController.clear();
     setState(() {
       _pendingAttachmentPaths.clear();
       _showPicker = false;
+      _replyingTo = null;
     });
   }
 
   void _sendSticker(StickerItem sticker) {
-    widget.onSendMessage('[sticker:${sticker.id}:${sticker.url}]');
+    var payload = '[sticker:${sticker.id}:${sticker.url}]';
+    if (_replyingTo != null) {
+      payload = buildChatMessageReplyPayload(_replyingTo!, payload);
+    }
+    widget.onSendMessage(payload);
     setState(() {
       _showPicker = false;
+      _replyingTo = null;
     });
   }
 
@@ -205,46 +433,226 @@ class _ChatScreenState extends State<ChatScreen> {
                       controller: _scrollController,
                       padding: const EdgeInsets.all(16),
                       children: [
-                        ...conversation.messages.map((message) {
-                          final isMine =
-                              message.senderId == widget.currentUser.id;
-                          final parsed = parseStickerMessage(message.text);
-                          final sticker = parsed == null
-                              ? null
-                              : findStickerById(parsed.id);
-                          if (parsed != null) {
-                            return Align(
-                              alignment: isMine
-                                  ? Alignment.centerRight
-                                  : Alignment.centerLeft,
-                              child: Container(
-                                margin: const EdgeInsets.only(bottom: 12),
-                                child: Column(
+                        ...conversation.messages
+                            .where((m) => !_deletedMessageIds.contains(m.id))
+                            .map((message) {
+                              final isMine =
+                                  message.senderId == widget.currentUser.id;
+                              final senderName = isMine
+                                  ? 'Chính bạn'
+                                  : conversation.user.name;
+                              final isUnsent = _unsentMessageIds.contains(
+                                message.id,
+                              );
+                              final myRx = _userReactions[message.id];
+                              final rxMap = _messageReactions[message.id] ?? {};
+                              final rxEntries = rxMap.entries
+                                  .where((e) => e.value > 0)
+                                  .toList();
+
+                              if (isUnsent) {
+                                return Align(
+                                  alignment: isMine
+                                      ? Alignment.centerRight
+                                      : Alignment.centerLeft,
+                                  child: Container(
+                                    margin: const EdgeInsets.only(bottom: 12),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 14,
+                                      vertical: 8,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: colorScheme.surfaceContainerHighest
+                                          .withValues(alpha: 0.4),
+                                      borderRadius: BorderRadius.circular(16),
+                                      border: Border.all(
+                                        color: palette.border.withValues(
+                                          alpha: 0.6,
+                                        ),
+                                      ),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.undo_rounded,
+                                          size: 14,
+                                          color: palette.textSecondary,
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          'Tin nhắn đã được thu hồi',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontStyle: FontStyle.italic,
+                                            color: palette.textSecondary,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              }
+
+                              final parsedReply = parseChatMessageReply(
+                                message.text,
+                              );
+                              final parsedSticker = parseStickerMessage(
+                                parsedReply.cleanText,
+                              );
+                              final sticker = parsedSticker == null
+                                  ? null
+                                  : findStickerById(parsedSticker.id);
+
+                              final Widget messageBubble;
+
+                              if (parsedSticker != null) {
+                                messageBubble = Column(
                                   crossAxisAlignment: isMine
                                       ? CrossAxisAlignment.end
                                       : CrossAxisAlignment.start,
                                   children: [
-                                    ClipRRect(
-                                      borderRadius: BorderRadius.circular(12),
-                                      child: sticker == null
-                                          ? const SizedBox(
-                                              width: 125,
-                                              height: 60,
-                                              child: Center(
-                                                child: Text('[Nhãn dán]'),
-                                              ),
-                                            )
-                                          : Image.network(
-                                              sticker.url,
-                                              width: 125,
-                                              height: 125,
-                                              fit: BoxFit.contain,
-                                              errorBuilder: (_, _, _) => const Icon(
-                                                Icons
-                                                    .sentiment_satisfied_alt_rounded,
-                                                size: 48,
+                                    if (parsedReply.replyTo != null)
+                                      Container(
+                                        margin: const EdgeInsets.only(
+                                          bottom: 6,
+                                        ),
+                                        padding: const EdgeInsets.all(8),
+                                        decoration: BoxDecoration(
+                                          color: colorScheme
+                                              .surfaceContainerHighest
+                                              .withValues(alpha: 0.5),
+                                          borderRadius: BorderRadius.circular(
+                                            10,
+                                          ),
+                                          border: Border(
+                                            left: BorderSide(
+                                              color: colorScheme.primary,
+                                              width: 3,
+                                            ),
+                                          ),
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              parsedReply.replyTo!.senderName,
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.w700,
+                                                color: colorScheme.primary,
                                               ),
                                             ),
+                                            Text(
+                                              parsedReply.replyTo!.text,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: palette.textSecondary,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    Stack(
+                                      clipBehavior: Clip.none,
+                                      children: [
+                                        ClipRRect(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          child: sticker == null
+                                              ? const SizedBox(
+                                                  width: 125,
+                                                  height: 60,
+                                                  child: Center(
+                                                    child: Text('[Nhãn dán]'),
+                                                  ),
+                                                )
+                                              : Image.network(
+                                                  sticker.url,
+                                                  width: 125,
+                                                  height: 125,
+                                                  fit: BoxFit.contain,
+                                                  errorBuilder: (_, _, _) =>
+                                                      const Icon(
+                                                        Icons
+                                                            .sentiment_satisfied_alt_rounded,
+                                                        size: 48,
+                                                      ),
+                                                ),
+                                        ),
+                                        if (rxEntries.isNotEmpty)
+                                          Positioned(
+                                            bottom: -6,
+                                            right: isMine ? 2 : null,
+                                            left: isMine ? null : 2,
+                                            child: InkWell(
+                                              onTap: () => _toggleReaction(
+                                                message.id,
+                                                myRx ?? '❤️',
+                                              ),
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              child: Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 6,
+                                                      vertical: 2,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  color: colorScheme.surface,
+                                                  borderRadius:
+                                                      BorderRadius.circular(12),
+                                                  boxShadow: [
+                                                    BoxShadow(
+                                                      color: Colors.black
+                                                          .withValues(
+                                                            alpha: 0.12,
+                                                          ),
+                                                      blurRadius: 4,
+                                                      offset: const Offset(
+                                                        0,
+                                                        1,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                  border: Border.all(
+                                                    color: palette.border,
+                                                    width: 0.6,
+                                                  ),
+                                                ),
+                                                child: Row(
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    ...rxEntries.map(
+                                                      (e) => Text(
+                                                        e.key,
+                                                        style: const TextStyle(
+                                                          fontSize: 11,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    const SizedBox(width: 3),
+                                                    Text(
+                                                      '${rxEntries.fold(0, (acc, e) => acc + e.value)}',
+                                                      style: TextStyle(
+                                                        fontSize: 10,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                        color: palette
+                                                            .textSecondary,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                      ],
                                     ),
                                     const SizedBox(height: 2),
                                     Padding(
@@ -261,61 +669,236 @@ class _ChatScreenState extends State<ChatScreen> {
                                       ),
                                     ),
                                   ],
-                                ),
-                              ),
-                            );
-                          }
-                          return Align(
-                            alignment: isMine
-                                ? Alignment.centerRight
-                                : Alignment.centerLeft,
-                            child: Container(
-                              margin: const EdgeInsets.only(bottom: 12),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 10,
-                              ),
-                              constraints: BoxConstraints(
-                                maxWidth:
-                                    MediaQuery.of(context).size.width * 0.75,
-                              ),
-                              decoration: isMine
-                                  ? BoxDecoration(
-                                      color: colorScheme.primary,
-                                      borderRadius: BorderRadius.circular(
-                                        AppRadius.md,
+                                );
+                              } else {
+                                messageBubble = Stack(
+                                  clipBehavior: Clip.none,
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 14,
+                                        vertical: 10,
                                       ),
-                                    )
-                                  : AppDecorations.card(context),
-                              child: Column(
-                                crossAxisAlignment: isMine
-                                    ? CrossAxisAlignment.end
-                                    : CrossAxisAlignment.start,
-                                children: [
-                                  if (message.attachments.isNotEmpty) ...[
-                                    _buildAttachments(
-                                      message.attachments,
-                                      isMine,
+                                      constraints: BoxConstraints(
+                                        maxWidth:
+                                            MediaQuery.of(context).size.width *
+                                            0.75,
+                                      ),
+                                      decoration: isMine
+                                          ? BoxDecoration(
+                                              color: colorScheme.primary,
+                                              borderRadius:
+                                                  BorderRadius.circular(
+                                                    AppRadius.md,
+                                                  ),
+                                            )
+                                          : AppDecorations.card(context),
+                                      child: Column(
+                                        crossAxisAlignment: isMine
+                                            ? CrossAxisAlignment.end
+                                            : CrossAxisAlignment.start,
+                                        children: [
+                                          if (parsedReply.replyTo != null)
+                                            Container(
+                                              margin: const EdgeInsets.only(
+                                                bottom: 6,
+                                              ),
+                                              padding: const EdgeInsets.all(8),
+                                              decoration: BoxDecoration(
+                                                color: isMine
+                                                    ? Colors.white.withValues(
+                                                        alpha: 0.18,
+                                                      )
+                                                    : colorScheme
+                                                          .surfaceContainerHighest
+                                                          .withValues(
+                                                            alpha: 0.6,
+                                                          ),
+                                                borderRadius:
+                                                    BorderRadius.circular(10),
+                                                border: Border(
+                                                  left: BorderSide(
+                                                    color: isMine
+                                                        ? Colors.white
+                                                        : colorScheme.primary,
+                                                    width: 3,
+                                                  ),
+                                                ),
+                                              ),
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Row(
+                                                    mainAxisSize:
+                                                        MainAxisSize.min,
+                                                    children: [
+                                                      Icon(
+                                                        Icons.reply_rounded,
+                                                        size: 12,
+                                                        color: isMine
+                                                            ? Colors.white70
+                                                            : colorScheme
+                                                                  .primary,
+                                                      ),
+                                                      const SizedBox(width: 4),
+                                                      Text(
+                                                        parsedReply
+                                                            .replyTo!
+                                                            .senderName,
+                                                        style: TextStyle(
+                                                          fontSize: 11,
+                                                          fontWeight:
+                                                              FontWeight.w700,
+                                                          color: isMine
+                                                              ? Colors.white
+                                                              : colorScheme
+                                                                    .primary,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                  const SizedBox(height: 2),
+                                                  Text(
+                                                    parsedReply.replyTo!.text,
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: TextStyle(
+                                                      fontSize: 11,
+                                                      color: isMine
+                                                          ? Colors.white70
+                                                          : palette
+                                                                .textSecondary,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          if (message
+                                              .attachments
+                                              .isNotEmpty) ...[
+                                            _buildAttachments(
+                                              message.attachments,
+                                              isMine,
+                                            ),
+                                            if (parsedReply
+                                                .cleanText
+                                                .isNotEmpty)
+                                              const SizedBox(height: 6),
+                                          ],
+                                          if (parsedReply.cleanText.isNotEmpty)
+                                            Text(
+                                              parsedReply.cleanText,
+                                              style: TextStyle(
+                                                color: isMine
+                                                    ? colorScheme.onPrimary
+                                                    : colorScheme.onSurface,
+                                              ),
+                                            ),
+                                        ],
+                                      ),
                                     ),
-                                    if (message.text.isNotEmpty)
-                                      const SizedBox(height: 6),
+                                    if (rxEntries.isNotEmpty)
+                                      Positioned(
+                                        bottom: -8,
+                                        right: isMine ? 4 : null,
+                                        left: isMine ? null : 4,
+                                        child: InkWell(
+                                          onTap: () => _toggleReaction(
+                                            message.id,
+                                            myRx ?? '❤️',
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 6,
+                                              vertical: 2,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: colorScheme.surface,
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              boxShadow: [
+                                                BoxShadow(
+                                                  color: Colors.black
+                                                      .withValues(alpha: 0.12),
+                                                  blurRadius: 4,
+                                                  offset: const Offset(0, 1),
+                                                ),
+                                              ],
+                                              border: Border.all(
+                                                color: palette.border,
+                                                width: 0.6,
+                                              ),
+                                            ),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                ...rxEntries.map(
+                                                  (e) => Text(
+                                                    e.key,
+                                                    style: const TextStyle(
+                                                      fontSize: 11,
+                                                    ),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 3),
+                                                Text(
+                                                  '${rxEntries.fold(0, (acc, e) => acc + e.value)}',
+                                                  style: TextStyle(
+                                                    fontSize: 10,
+                                                    fontWeight: FontWeight.w600,
+                                                    color:
+                                                        palette.textSecondary,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
                                   ],
-                                  if (message.text.isNotEmpty)
-                                    Text(
-                                      message.text,
-                                      style: TextStyle(
-                                        // onPrimary stays readable in dark mode,
-                                        // where primary is a light color.
-                                        color: isMine
-                                            ? colorScheme.onPrimary
-                                            : colorScheme.onSurface,
-                                      ),
+                                );
+                              }
+
+                              return Dismissible(
+                                key: ValueKey('swipe_${message.id}'),
+                                direction: DismissDirection.startToEnd,
+                                confirmDismiss: (_) async {
+                                  _startReply(message, senderName);
+                                  return false;
+                                },
+                                background: Container(
+                                  alignment: Alignment.centerLeft,
+                                  padding: const EdgeInsets.only(left: 16),
+                                  child: Icon(
+                                    Icons.reply_rounded,
+                                    color: colorScheme.primary,
+                                  ),
+                                ),
+                                child: Align(
+                                  alignment: isMine
+                                      ? Alignment.centerRight
+                                      : Alignment.centerLeft,
+                                  child: Container(
+                                    margin: const EdgeInsets.only(bottom: 14),
+                                    child: GestureDetector(
+                                      onLongPress: () =>
+                                          _showMessageActionSheet(
+                                            context,
+                                            message,
+                                            senderName,
+                                            isMine,
+                                          ),
+                                      child: messageBubble,
                                     ),
-                                ],
-                              ),
-                            ),
-                          );
-                        }),
+                                  ),
+                                ),
+                              );
+                            }),
                         if (widget.isPartnerTyping)
                           Align(
                             alignment: Alignment.centerLeft,
@@ -409,6 +992,65 @@ class _ChatScreenState extends State<ChatScreen> {
                       ],
                     );
                   },
+                ),
+              ),
+            if (_replyingTo != null)
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: colorScheme.primary.withValues(alpha: 0.08),
+                  border: Border(
+                    top: BorderSide(color: palette.border, width: 0.5),
+                    left: BorderSide(color: colorScheme.primary, width: 3.5),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.reply_rounded,
+                      color: colorScheme.primary,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            'Đang trả lời ${_replyingTo!.senderName}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: colorScheme.primary,
+                            ),
+                          ),
+                          Text(
+                            _replyingTo!.text,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: palette.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => setState(() => _replyingTo = null),
+                      icon: const Icon(Icons.close_rounded, size: 18),
+                      tooltip: 'Hủy trả lời',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                        minWidth: 24,
+                        minHeight: 24,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             Container(

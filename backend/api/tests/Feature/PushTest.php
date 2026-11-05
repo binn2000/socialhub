@@ -106,6 +106,22 @@ class PushTest extends TestCase
             && $job->data['type'] === 'like' && $job->data['postId'] === $post->id);
     }
 
+    public function test_a_reaction_pushes_with_its_emoji(): void
+    {
+        Queue::fake([SendPush::class]);
+        [$author, $fan] = User::factory()->count(2)->create();
+        $fan->forceFill(['name' => 'Khang'])->save();
+        $post = Post::forceCreate([
+            'id' => (string) Str::ulid(), 'user_id' => $author->id, 'content' => 'hi', 'privacy' => 'public',
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        \DB::table('post_likes')->insert(['post_id' => $post->id, 'user_id' => $fan->id, 'reaction' => 'haha', 'created_at' => now()]);
+
+        (new CreateNotification($author->id, $fan->id, 'like', postId: $post->id, dedupeKey: 'k2'))->handle();
+
+        Queue::assertPushed(SendPush::class, fn (SendPush $job) => $job->body === 'Khang đã bày tỏ cảm xúc 😆 về bài viết của bạn');
+    }
+
     public function test_a_chat_message_pushes_to_the_other_person(): void
     {
         Queue::fake([SendPush::class]);

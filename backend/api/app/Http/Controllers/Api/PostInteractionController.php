@@ -18,6 +18,9 @@ class PostInteractionController extends Controller
     /** The reactions a person can leave on a post; "like" is the plain Thích. */
     public const REACTIONS = ['like', 'love', 'haha', 'wow', 'sad', 'angry'];
 
+    /** The emoji of each reaction, for texts such as notifications and pushes. */
+    public const REACTION_EMOJIS = ['like' => '👍', 'love' => '❤️', 'haha' => '😆', 'wow' => '😮', 'sad' => '😢', 'angry' => '😡'];
+
     public function like(Request $request, Post $post): array
     {
         PostController::authorizeView($request, $post);

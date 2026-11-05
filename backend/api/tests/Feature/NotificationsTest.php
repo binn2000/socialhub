@@ -16,6 +16,25 @@ class NotificationsTest extends TestCase
         return $this->actingAs($u, 'sanctum')->postJson('/api/v1/posts', ['content' => $content])->json('data.id');
     }
 
+    public function test_a_like_notification_says_what_the_person_reacted_with(): void
+    {
+        [$author, $fan] = User::factory()->count(2)->create();
+        $postId = $this->postBy($author, 'Ngày đẹp trời');
+
+        $this->actingAs($fan, 'sanctum')->putJson("/api/v1/posts/$postId/like", ['reaction' => 'love']);
+        $this->postJson("/api/v1/posts/$postId/comments", ['content' => 'Hay quá!']);
+
+        $items = $this->actingAs($author, 'sanctum')->getJson('/api/v1/notifications')->assertOk()->json('data');
+        $by = array_column($items, null, 'type');
+        $this->assertSame('love', $by['like']['reaction']);
+        $this->assertNull($by['comment']['reaction']);
+
+        // Changing the reaction changes the same notification; a plain like is "like".
+        $this->actingAs($fan, 'sanctum')->putJson("/api/v1/posts/$postId/like", ['reaction' => 'haha']);
+        $like = $this->actingAs($author, 'sanctum')->getJson('/api/v1/notifications?category=interactions')->json('data');
+        $this->assertSame(['haha'], array_values(array_unique(array_filter(array_column($like, 'reaction')))));
+    }
+
     public function test_activity_produces_notifications_with_related_content(): void
     {
         [$author, $fan] = User::factory()->count(2)->create();

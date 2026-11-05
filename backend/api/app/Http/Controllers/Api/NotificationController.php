@@ -52,6 +52,11 @@ class NotificationController extends Controller
         // relatedContent and the pending state are read now, not stored.
         $posts = Post::whereIn('id', $page->pluck('post_id')->filter())->pluck('content', 'id');
         $comments = Comment::whereIn('id', $page->pluck('comment_id')->filter())->pluck('content', 'id');
+        // What each person reacted with, for the like notifications (read now, so a changed reaction shows).
+        $reactions = DB::table('post_likes')->whereIn('post_id', $page->where('type', 'like')->pluck('post_id'))
+            ->whereIn('user_id', $page->where('type', 'like')->pluck('actor_id'))
+            ->get(['post_id', 'user_id', 'reaction'])
+            ->mapWithKeys(fn ($r) => [$r->post_id.'|'.$r->user_id => $r->reaction]);
         $pending = DB::table('friendships')->whereIn('id', $page->pluck('friendship_id')->filter())
             ->where('status', 'pending')->pluck('id')->flip();
 
@@ -63,6 +68,7 @@ class NotificationController extends Controller
                 'isRead' => $n->read_at !== null,
                 'createdAt' => PostPresenter::timestamp($n->created_at),
                 'postId' => $n->post_id,
+                'reaction' => $n->type === 'like' ? ($reactions[$n->post_id.'|'.$n->actor_id] ?? 'like') : null,
                 'commentId' => $n->comment_id,
                 'friendRequestId' => $n->type === 'friend_request' && $pending->has($n->friendship_id) ? $n->friendship_id : null,
                 'relatedContent' => $this->excerpt(match ($n->type) {

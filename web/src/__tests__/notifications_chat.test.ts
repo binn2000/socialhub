@@ -12,11 +12,22 @@ import type { Notification, Conversation, Message } from "@/types";
 
 describe("Phase 5: Notifications & Chat (Messenger)", () => {
   describe("Notification helpers", () => {
+    it("shows the reaction in a like notification", () => {
+      const love = getNotificationMeta("like", "love");
+      expect(love.description).toBe("đã bày tỏ cảm xúc ❤️ về bài viết của bạn");
+      expect(love.emoji).toBe("❤️");
+      expect(getNotificationMeta("like", "haha").emoji).toBe("😆");
+      // A plain like keeps its text and has no emoji.
+      expect(getNotificationMeta("like", "like").description).toBe("đã thích bài viết của bạn");
+      expect(getNotificationMeta("like", null).emoji).toBeUndefined();
+      expect(getNotificationMeta("comment", "love").emoji).toBeUndefined();
+    });
+
     it("returns correct meta for 'like' notification", () => {
       const meta = getNotificationMeta("like");
       expect(meta.description).toBe("đã thích bài viết của bạn");
       expect(meta.category).toBe("interactions");
-      expect(meta.iconColor).toContain("rose");
+      expect(meta.iconColor).toContain("0866FF"); // the thumb of a plain Thích
     });
 
     it("returns correct meta for 'comment' notification", () => {

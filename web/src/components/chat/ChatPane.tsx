@@ -12,6 +12,12 @@ import {
   Download,
   X,
   AlertCircle,
+  Reply,
+  Copy,
+  Undo2,
+  Trash2,
+  Forward,
+  MoreHorizontal,
 } from "lucide-react";
 import { UserAvatar } from "@/components/ui/UserAvatar";
 import { timeAgo } from "@/lib/time-ago";
@@ -21,6 +27,12 @@ import { useBadges } from "@/context/BadgeContext";
 import { useToast } from "@/context/ToastContext";
 import { ImageViewerModal } from "@/components/feed/ImageViewerModal";
 import { parseStickerMessage, StickerItem } from "@/lib/chat-emojis-stickers";
+import {
+  MESSAGE_REACTIONS,
+  parseReplyMessage,
+  buildReplyPayload,
+  type QuotedMessage,
+} from "@/lib/chat-interactions";
 import { oldestFirst } from "@/lib/messages";
 import { EmojiStickerPicker } from "./EmojiStickerPicker";
 import type { Conversation, Message, Attachment } from "@/types";
@@ -54,9 +66,177 @@ export function ChatPane({
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [pendingPreviews, setPendingPreviews] = useState<string[]>([]);
 
+  // Reply / Quote state
+  const [replyingTo, setReplyingTo] = useState<QuotedMessage | null>(null);
+
+  // Message Reactions state: msgId -> { emoji: count }
+  const [reactionsMap, setReactionsMap] = useState<Record<string, Record<string, number>>>({});
+  // userReactions: msgId -> current emoji reacted by user
+  const [userReactions, setUserReactions] = useState<Record<string, string>>({});
+
+  // Message Action States (Unsend / Delete for me)
+  const [unsentMessageIds, setUnsentMessageIds] = useState<Set<string>>(new Set());
+  const [deletedMessageIds, setDeletedMessageIds] = useState<Set<string>>(new Set());
+
+  // Context Menu State
+  const [contextMenu, setContextMenu] = useState<{
+    msg: Message;
+    x: number;
+    y: number;
+  } | null>(null);
+
   // Lightbox
   const [viewerImages, setViewerImages] = useState<string[]>([]);
   const [viewerIndex, setViewerIndex] = useState(0);
+
+  // Close context menu when clicking outside
+  useEffect(() => {
+    const handleCloseMenu = () => setContextMenu(null);
+    window.addEventListener("click", handleCloseMenu);
+    return () => window.removeEventListener("click", handleCloseMenu);
+  }, []);
+
+  // Load / persist reactions per conversation
+  useEffect(() => {
+    if (!conversationId) return;
+    try {
+      const stored = localStorage.getItem(`chat_rx_${conversationId}`);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed.reactionsMap) setReactionsMap(parsed.reactionsMap);
+        if (parsed.userReactions) setUserReactions(parsed.userReactions);
+      }
+      const storedUnsent = localStorage.getItem(`chat_unsent_${conversationId}`);
+      if (storedUnsent) {
+        setUnsentMessageIds(new Set(JSON.parse(storedUnsent)));
+      }
+      const storedDel = localStorage.getItem(`chat_del_${conversationId}`);
+      if (storedDel) {
+        setDeletedMessageIds(new Set(JSON.parse(storedDel)));
+      }
+    } catch {
+      // Ignore localStorage errors
+    }
+  }, [conversationId]);
+
+  const handleToggleReaction = useCallback((msgId: string, emoji: string) => {
+    setUserReactions((prevUserRx) => {
+      const current = prevUserRx[msgId];
+      const nextUserRx = { ...prevUserRx };
+
+      setReactionsMap((prevRxMap) => {
+        const msgRx = { ...(prevRxMap[msgId] || {}) };
+
+        if (current === emoji) {
+          // Toggle off
+          if (msgRx[emoji] > 1) {
+            msgRx[emoji] -= 1;
+          } else {
+            delete msgRx[emoji];
+          }
+          delete nextUserRx[msgId];
+        } else {
+          // If changing from another emoji
+          if (current && msgRx[current]) {
+            if (msgRx[current] > 1) {
+              msgRx[current] -= 1;
+            } else {
+              delete msgRx[current];
+            }
+          }
+          msgRx[emoji] = (msgRx[emoji] || 0) + 1;
+          nextUserRx[msgId] = emoji;
+        }
+
+        const nextMap = { ...prevRxMap, [msgId]: msgRx };
+        try {
+          localStorage.setItem(
+            `chat_rx_${conversationId}`,
+            JSON.stringify({ reactionsMap: nextMap, userReactions: nextUserRx })
+          );
+        } catch {
+          // Ignore
+        }
+        return nextMap;
+      });
+
+      return nextUserRx;
+    });
+  }, [conversationId]);
+
+  const handleStartReply = useCallback((msg: Message) => {
+    const isMine = msg.senderId === currentUser?.id;
+    const authorName = isMine ? "Chính bạn" : (conversation?.participant?.name || "Đối phương");
+    const sticker = parseStickerMessage(msg.text);
+    const snippet = sticker
+      ? "[Nhãn dán 3D]"
+      : msg.attachments && msg.attachments.length > 0
+      ? `[${msg.attachments[0].type === "image" ? "Hình ảnh" : "Tệp tin"}] ${msg.text || ""}`
+      : msg.text || "Tin nhắn";
+
+    setReplyingTo({
+      id: msg.id,
+      senderName: authorName,
+      text: snippet,
+    });
+  }, [currentUser?.id, conversation?.participant?.name]);
+
+  const handleCopyMessage = useCallback((msg: Message) => {
+    const parsed = parseReplyMessage(msg.text);
+    const textToCopy = parsed.text || msg.text || "";
+    if (textToCopy) {
+      navigator.clipboard.writeText(textToCopy);
+      toast.success("Đã sao chép tin nhắn vào bộ nhớ tạm");
+    } else {
+      toast.info("Không có nội dung văn bản để sao chép");
+    }
+  }, [toast]);
+
+  const handleUnsendMessage = useCallback((msgId: string) => {
+    setUnsentMessageIds((prev) => {
+      const next = new Set(prev).add(msgId);
+      try {
+        localStorage.setItem(`chat_unsent_${conversationId}`, JSON.stringify(Array.from(next)));
+      } catch {
+        // Ignore
+      }
+      return next;
+    });
+    toast.info("Đã thu hồi tin nhắn");
+  }, [conversationId, toast]);
+
+  const handleDeleteMessage = useCallback((msgId: string) => {
+    setDeletedMessageIds((prev) => {
+      const next = new Set(prev).add(msgId);
+      try {
+        localStorage.setItem(`chat_del_${conversationId}`, JSON.stringify(Array.from(next)));
+      } catch {
+        // Ignore
+      }
+      return next;
+    });
+    toast.info("Đã xóa tin nhắn ở phía bạn");
+  }, [conversationId, toast]);
+
+  const handleForwardMessage = useCallback((msg: Message) => {
+    const parsed = parseReplyMessage(msg.text);
+    const textToForward = parsed.text || msg.text || "";
+    setInputText((prev) => (prev ? `${prev}\n${textToForward}` : textToForward));
+    toast.success("Đã đưa nội dung tin nhắn vào ô soạn thảo để chuyển tiếp");
+  }, [toast]);
+
+  const scrollToMessage = useCallback((msgId: string) => {
+    const el = document.getElementById(`msg-${msgId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.add("ring-2", "ring-brand", "ring-offset-2");
+      setTimeout(() => {
+        el.classList.remove("ring-2", "ring-brand", "ring-offset-2");
+      }, 1500);
+    } else {
+      toast.info("Tin nhắn gốc ở vị trí xa hơn trong lịch sử");
+    }
+  }, [toast]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -214,7 +394,13 @@ export function ChatPane({
 
     const idempotencyKey = crypto.randomUUID();
     const formData = new FormData();
-    if (text) formData.append("text", text);
+
+    // Format with reply envelope if replying to a message
+    const finalPayload = replyingTo && text
+      ? buildReplyPayload(replyingTo, text)
+      : text;
+
+    if (finalPayload) formData.append("text", finalPayload);
 
     for (const file of pendingFiles) {
       formData.append("attachments[]", file);
@@ -234,6 +420,7 @@ export function ChatPane({
 
       setMessages((prev) => [...prev, res.data]);
       setInputText("");
+      setReplyingTo(null);
       setPendingFiles([]);
       setPendingPreviews([]);
       setShowEmojiPicker(false);
@@ -249,7 +436,10 @@ export function ChatPane({
     if (sending) return;
     setSending(true);
     try {
-      const stickerPayload = `[sticker:${sticker.id}:${sticker.url}]`;
+      let stickerPayload = `[sticker:${sticker.id}:${sticker.url}]`;
+      if (replyingTo) {
+        stickerPayload = buildReplyPayload(replyingTo, stickerPayload);
+      }
       const idempotencyKey = crypto.randomUUID();
       const res = await clientFetch<{ data: Message }>(
         `/api/proxy/conversations/${conversationId}/messages`,
@@ -265,6 +455,7 @@ export function ChatPane({
       );
 
       setMessages((prev) => [...prev, res.data]);
+      setReplyingTo(null);
       setShowEmojiPicker(false);
       setTimeout(() => scrollToBottom(true), 50);
     } catch {
@@ -291,6 +482,8 @@ export function ChatPane({
     : participant?.lastSeenAt
     ? `Hoạt động ${timeAgo(participant.lastSeenAt)}`
     : "Không hoạt động";
+
+  const visibleMessages = messages.filter((m) => !deletedMessageIds.has(m.id));
 
   return (
     <div
@@ -350,7 +543,7 @@ export function ChatPane({
             <div className="w-7 h-7 border-2 border-brand border-t-transparent rounded-full animate-spin mb-2" />
             <span className="text-xs">Đang tải tin nhắn...</span>
           </div>
-        ) : messages.length === 0 ? (
+        ) : visibleMessages.length === 0 ? (
           <div className="py-24 text-center text-appText-secondary">
             <UserAvatar
               name={participant?.name}
@@ -366,17 +559,116 @@ export function ChatPane({
             </p>
           </div>
         ) : (
-          messages.map((msg) => {
+          visibleMessages.map((msg) => {
             const isMine = msg.senderId === currentUser?.id;
-            const sticker = parseStickerMessage(msg.text);
+            const isUnsent = unsentMessageIds.has(msg.id);
+            const msgRx = reactionsMap[msg.id] || {};
+            const rxEntries = Object.entries(msgRx).filter(([_, count]) => count > 0);
+            const myRx = userReactions[msg.id];
+            const { reply: parsedReply, text: cleanText } = parseReplyMessage(msg.text);
+            const sticker = parseStickerMessage(cleanText);
+
+            if (isUnsent) {
+              return (
+                <div
+                  key={msg.id}
+                  id={`msg-${msg.id}`}
+                  className={`flex flex-col ${isMine ? "items-end" : "items-start"}`}
+                >
+                  <div className="px-3.5 py-1.5 rounded-2xl border border-dashed border-appBorder-light dark:border-appBorder-dark text-xs italic text-appText-secondary bg-surface-muted/50 dark:bg-surface-dark-muted/30 flex items-center gap-1.5 select-none">
+                    <Undo2 className="w-3.5 h-3.5 opacity-60" />
+                    <span>Tin nhắn đã được thu hồi</span>
+                  </div>
+                  <span className="text-[10px] text-appText-secondary mt-0.5 px-2">
+                    {timeAgo(msg.createdAt)}
+                  </span>
+                </div>
+              );
+            }
 
             if (sticker) {
               return (
                 <div
                   key={msg.id}
-                  className={`flex flex-col ${isMine ? "items-end" : "items-start"}`}
+                  id={`msg-${msg.id}`}
+                  className={`relative group flex flex-col ${isMine ? "items-end" : "items-start"}`}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setContextMenu({
+                      msg,
+                      x: Math.min(window.innerWidth - 190, e.clientX),
+                      y: Math.min(window.innerHeight - 220, e.clientY),
+                    });
+                  }}
                 >
-                  <div className="relative group p-1 select-none">
+                  {/* Floating Action Bar on Hover */}
+                  <div
+                    className={`absolute -top-3.5 ${
+                      isMine ? "right-2" : "left-2"
+                    } z-20 hidden group-hover:flex items-center gap-1 px-2 py-1 bg-white/95 dark:bg-surface-dark/95 backdrop-blur-md rounded-full shadow-lg border border-appBorder-light dark:border-appBorder-dark select-none animate-in fade-in zoom-in-95 duration-150`}
+                  >
+                    {MESSAGE_REACTIONS.map((emoji) => (
+                      <button
+                        key={emoji}
+                        type="button"
+                        onClick={() => handleToggleReaction(msg.id, emoji)}
+                        className={`p-0.5 text-base leading-none transition-transform hover:scale-130 active:scale-95 cursor-pointer rounded-full ${
+                          myRx === emoji ? "bg-brand/15 scale-110" : ""
+                        }`}
+                        title={`Thả ${emoji}`}
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                    <div className="h-3.5 w-px bg-appBorder-light dark:bg-appBorder-dark mx-0.5" />
+                    <button
+                      type="button"
+                      onClick={() => handleStartReply(msg)}
+                      className="p-1 text-appText-secondary hover:text-brand transition rounded-full hover:bg-surface-muted dark:hover:bg-surface-dark-muted cursor-pointer"
+                      title="Trả lời"
+                    >
+                      <Reply className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        setContextMenu({
+                          msg,
+                          x: Math.min(window.innerWidth - 190, rect.left),
+                          y: Math.min(window.innerHeight - 220, rect.bottom + 4),
+                        });
+                      }}
+                      className="p-1 text-appText-secondary hover:text-brand transition rounded-full hover:bg-surface-muted dark:hover:bg-surface-dark-muted cursor-pointer"
+                      title="Tùy chọn khác"
+                    >
+                      <MoreHorizontal className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {/* Quoted Reply Box if sticker was a reply */}
+                  {parsedReply && (
+                    <div
+                      onClick={() => scrollToMessage(parsedReply.id)}
+                      className={`p-2 rounded-xl mb-1 text-xs border-l-2 cursor-pointer transition select-none ${
+                        isMine
+                          ? "bg-white/15 hover:bg-white/25 border-white text-white"
+                          : "bg-surface-muted/90 dark:bg-appBorder-dark/60 hover:bg-surface-muted border-brand text-appText-primary dark:text-white"
+                      }`}
+                      title="Nhấp để chuyển đến tin nhắn gốc"
+                    >
+                      <div className="flex items-center gap-1 font-semibold text-[11px] opacity-90 truncate">
+                        <Reply className="w-3 h-3 rotate-180 flex-shrink-0" />
+                        <span className="truncate">{parsedReply.senderName}</span>
+                      </div>
+                      <p className="text-[11px] truncate opacity-80 mt-0.5">
+                        {parsedReply.text}
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="relative p-1 select-none">
                     {sticker.url ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
@@ -387,6 +679,31 @@ export function ChatPane({
                       />
                     ) : (
                       <span className="text-sm text-appText-secondary">[Nhãn dán]</span>
+                    )}
+
+                    {/* Reaction Badge */}
+                    {rxEntries.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => handleToggleReaction(msg.id, myRx || "❤️")}
+                        className={`absolute -bottom-2 ${
+                          isMine ? "right-1" : "left-1"
+                        } z-10 flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-white dark:bg-surface-dark shadow-sm border border-appBorder-light dark:border-appBorder-dark text-[11px] font-semibold transition hover:scale-105 active:scale-95 cursor-pointer ${
+                          myRx ? "ring-1 ring-brand/40" : ""
+                        }`}
+                        title="Nhấp để thu hồi cảm xúc"
+                      >
+                        <span className="flex items-center -space-x-1">
+                          {rxEntries.map(([em]) => (
+                            <span key={em} className="text-xs">
+                              {em}
+                            </span>
+                          ))}
+                        </span>
+                        <span className="text-[10px] text-appText-secondary ml-0.5">
+                          {rxEntries.reduce((sum, [_, c]) => sum + c, 0)}
+                        </span>
+                      </button>
                     )}
                   </div>
                   <span className="text-[10px] text-appText-secondary mt-0.5 px-2">
@@ -399,15 +716,91 @@ export function ChatPane({
             return (
               <div
                 key={msg.id}
-                className={`flex flex-col ${isMine ? "items-end" : "items-start"}`}
+                id={`msg-${msg.id}`}
+                className={`relative group flex flex-col ${isMine ? "items-end" : "items-start"}`}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setContextMenu({
+                    msg,
+                    x: Math.min(window.innerWidth - 190, e.clientX),
+                    y: Math.min(window.innerHeight - 220, e.clientY),
+                  });
+                }}
               >
+                {/* Floating Action Bar on Hover */}
                 <div
-                  className={`max-w-[85%] sm:max-w-[70%] rounded-2xl p-3 shadow-xs space-y-2 ${
+                  className={`absolute -top-3.5 ${
+                    isMine ? "right-2" : "left-2"
+                  } z-20 hidden group-hover:flex items-center gap-1 px-2 py-1 bg-white/95 dark:bg-surface-dark/95 backdrop-blur-md rounded-full shadow-lg border border-appBorder-light dark:border-appBorder-dark select-none animate-in fade-in zoom-in-95 duration-150`}
+                >
+                  {MESSAGE_REACTIONS.map((emoji) => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      onClick={() => handleToggleReaction(msg.id, emoji)}
+                      className={`p-0.5 text-base leading-none transition-transform hover:scale-130 active:scale-95 cursor-pointer rounded-full ${
+                        myRx === emoji ? "bg-brand/15 scale-110" : ""
+                      }`}
+                      title={`Thả ${emoji}`}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                  <div className="h-3.5 w-px bg-appBorder-light dark:bg-appBorder-dark mx-0.5" />
+                  <button
+                    type="button"
+                    onClick={() => handleStartReply(msg)}
+                    className="p-1 text-appText-secondary hover:text-brand transition rounded-full hover:bg-surface-muted dark:hover:bg-surface-dark-muted cursor-pointer"
+                    title="Trả lời"
+                  >
+                    <Reply className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      setContextMenu({
+                        msg,
+                        x: Math.min(window.innerWidth - 190, rect.left),
+                        y: Math.min(window.innerHeight - 220, rect.bottom + 4),
+                      });
+                    }}
+                    className="p-1 text-appText-secondary hover:text-brand transition rounded-full hover:bg-surface-muted dark:hover:bg-surface-dark-muted cursor-pointer"
+                    title="Tùy chọn khác"
+                  >
+                    <MoreHorizontal className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div
+                  className={`relative max-w-[85%] sm:max-w-[70%] rounded-2xl p-3 shadow-xs space-y-2 ${
                     isMine
                       ? "bg-brand text-white rounded-br-xs"
                       : "bg-white dark:bg-surface-dark-muted text-appText-primary dark:text-appText-dark-primary border border-appBorder-light/80 dark:border-appBorder-dark/80 rounded-bl-xs"
                   }`}
                 >
+                  {/* Quoted Message Preview Box */}
+                  {parsedReply && (
+                    <div
+                      onClick={() => scrollToMessage(parsedReply.id)}
+                      className={`p-2 rounded-xl mb-1.5 text-xs border-l-2 cursor-pointer transition select-none ${
+                        isMine
+                          ? "bg-white/15 hover:bg-white/25 border-white text-white"
+                          : "bg-surface-muted/90 dark:bg-appBorder-dark/60 hover:bg-surface-muted border-brand text-appText-primary dark:text-white"
+                      }`}
+                      title="Nhấp để chuyển đến tin nhắn gốc"
+                    >
+                      <div className="flex items-center gap-1 font-semibold text-[11px] opacity-90 truncate">
+                        <Reply className="w-3 h-3 rotate-180 flex-shrink-0" />
+                        <span className="truncate">{parsedReply.senderName}</span>
+                      </div>
+                      <p className="text-[11px] truncate opacity-80 mt-0.5">
+                        {parsedReply.text}
+                      </p>
+                    </div>
+                  )}
+
                   {/* Attachments */}
                   {msg.attachments && msg.attachments.length > 0 && (
                     <div className="space-y-1.5">
@@ -462,10 +855,35 @@ export function ChatPane({
                   )}
 
                   {/* Message Text */}
-                  {msg.text && (
+                  {cleanText && (
                     <p className="text-sm whitespace-pre-wrap break-words leading-relaxed">
-                      {msg.text}
+                      {cleanText}
                     </p>
+                  )}
+
+                  {/* Reaction Badges */}
+                  {rxEntries.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => handleToggleReaction(msg.id, myRx || "❤️")}
+                      className={`absolute -bottom-2.5 ${
+                        isMine ? "right-2" : "left-2"
+                      } z-10 flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-white dark:bg-surface-dark shadow-sm border border-appBorder-light dark:border-appBorder-dark text-[11px] font-semibold transition hover:scale-105 active:scale-95 cursor-pointer ${
+                        myRx ? "ring-1 ring-brand/40" : ""
+                      }`}
+                      title="Nhấp để thu hồi cảm xúc"
+                    >
+                      <span className="flex items-center -space-x-1">
+                        {rxEntries.map(([em]) => (
+                          <span key={em} className="text-xs">
+                            {em}
+                          </span>
+                        ))}
+                      </span>
+                      <span className="text-[10px] text-appText-secondary ml-0.5">
+                        {rxEntries.reduce((sum, [_, c]) => sum + c, 0)}
+                      </span>
+                    </button>
                   )}
                 </div>
 
@@ -536,6 +954,31 @@ export function ChatPane({
         </div>
       )}
 
+      {/* Quoted Reply Preview Bar */}
+      {replyingTo && (
+        <div className="px-4 py-2 bg-brand/5 dark:bg-brand/10 border-t border-brand/20 flex items-center justify-between animate-in fade-in slide-in-from-bottom-2 duration-150">
+          <div className="flex items-center gap-2.5 min-w-0 flex-1 border-l-2 border-brand pl-2.5">
+            <Reply className="w-4 h-4 text-brand flex-shrink-0" />
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold text-brand truncate">
+                Đang trả lời {replyingTo.senderName}
+              </p>
+              <p className="text-xs text-appText-secondary truncate">
+                {replyingTo.text}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setReplyingTo(null)}
+            className="p-1 rounded-full text-appText-secondary hover:text-appText-primary dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer"
+            title="Hủy trả lời"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Input Area */}
       <form
         onSubmit={handleSendMessage}
@@ -593,6 +1036,79 @@ export function ChatPane({
           isOpen={viewerImages.length > 0}
           onClose={() => setViewerImages([])}
         />
+      )}
+
+      {/* Floating Context Menu */}
+      {contextMenu && (
+        <div
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          className="fixed z-50 w-44 bg-white dark:bg-surface-dark border border-appBorder-light dark:border-appBorder-dark rounded-xl shadow-xl py-1.5 text-xs text-appText-primary dark:text-white animate-in fade-in zoom-in-95 duration-100 select-none"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              handleStartReply(contextMenu.msg);
+              setContextMenu(null);
+            }}
+            className="w-full px-3 py-2 text-left flex items-center gap-2 hover:bg-surface-muted dark:hover:bg-surface-dark-muted transition cursor-pointer"
+          >
+            <Reply className="w-4 h-4 text-brand" />
+            <span>Trả lời</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              handleCopyMessage(contextMenu.msg);
+              setContextMenu(null);
+            }}
+            className="w-full px-3 py-2 text-left flex items-center gap-2 hover:bg-surface-muted dark:hover:bg-surface-dark-muted transition cursor-pointer"
+          >
+            <Copy className="w-4 h-4 text-appText-secondary" />
+            <span>Sao chép văn bản</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              handleForwardMessage(contextMenu.msg);
+              setContextMenu(null);
+            }}
+            className="w-full px-3 py-2 text-left flex items-center gap-2 hover:bg-surface-muted dark:hover:bg-surface-dark-muted transition cursor-pointer"
+          >
+            <Forward className="w-4 h-4 text-blue-500" />
+            <span>Chuyển tiếp</span>
+          </button>
+
+          <div className="h-px bg-appBorder-light dark:border-appBorder-dark my-1" />
+
+          {contextMenu.msg.senderId === currentUser?.id && (
+            <button
+              type="button"
+              onClick={() => {
+                handleUnsendMessage(contextMenu.msg.id);
+                setContextMenu(null);
+              }}
+              className="w-full px-3 py-2 text-left flex items-center gap-2 text-amber-600 dark:text-amber-500 hover:bg-surface-muted dark:hover:bg-surface-dark-muted transition cursor-pointer"
+            >
+              <Undo2 className="w-4 h-4" />
+              <span>Thu hồi tin nhắn</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => {
+              handleDeleteMessage(contextMenu.msg.id);
+              setContextMenu(null);
+            }}
+            className="w-full px-3 py-2 text-left flex items-center gap-2 text-red-600 dark:text-red-500 hover:bg-surface-muted dark:hover:bg-surface-dark-muted transition cursor-pointer"
+          >
+            <Trash2 className="w-4 h-4" />
+            <span>Xóa ở phía tôi</span>
+          </button>
+        </div>
       )}
     </div>
   );

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_learning/data/post_reactions.dart';
 import 'package:flutter_learning/models/comment.dart';
 import 'package:flutter_learning/models/friend_request.dart';
 import 'package:flutter_learning/models/message.dart';
@@ -267,6 +268,33 @@ Conversation conversationFromJson(
   );
 }
 
+/// What a like notification looks like: the plain text for a Thích, or the
+/// emoji and colour of the reaction that was left.
+(String, String, IconData, Color) _likeLook(String? reaction) {
+  final chosen = findPostReaction(reaction);
+  if (chosen == null || chosen.key == 'like') {
+    return (
+      'like',
+      'đã thích bài viết của bạn',
+      Icons.favorite_rounded,
+      const Color(0xFFE91E63),
+    );
+  }
+  final icon = switch (chosen.key) {
+    'love' => Icons.favorite_rounded,
+    'haha' => Icons.sentiment_very_satisfied_rounded,
+    'wow' => Icons.sentiment_neutral_rounded,
+    'sad' => Icons.sentiment_dissatisfied_rounded,
+    _ => Icons.sentiment_very_dissatisfied_rounded,
+  };
+  return (
+    'like',
+    'đã bày tỏ cảm xúc ${chosen.emoji} về bài viết của bạn',
+    icon,
+    chosen.color,
+  );
+}
+
 SocialNotification notificationFromJson(
   Json json, {
   String Function(String)? absoluteUrl,
@@ -274,12 +302,7 @@ SocialNotification notificationFromJson(
   final type = json['type'] as String;
   // The app has one 'friend' kind for both friend notifications.
   final (kind, description, icon, color) = switch (type) {
-    'like' => (
-      'like',
-      'đã thích bài viết của bạn',
-      Icons.favorite_rounded,
-      const Color(0xFFE91E63),
-    ),
+    'like' => _likeLook(json['reaction'] as String?),
     'comment' => (
       'comment',
       'đã bình luận trong bài viết của bạn',

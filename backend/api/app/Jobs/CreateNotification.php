@@ -2,9 +2,11 @@
 
 namespace App\Jobs;
 
+use App\Http\Controllers\Api\PostInteractionController;
 use App\Models\Comment;
 use App\Models\Post;
 use App\Models\User;
+use App\Support\Blocks;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\DB;
@@ -35,12 +37,11 @@ class CreateNotification implements ShouldQueue
         public ?string $commentId = null,
         public ?string $friendshipId = null,
         public ?string $dedupeKey = null,
-    ) {
-    }
+    ) {}
 
     public function handle(): void
     {
-        if ($this->recipientId === $this->actorId || \App\Support\Blocks::either($this->recipientId, $this->actorId)) {
+        if ($this->recipientId === $this->actorId || Blocks::either($this->recipientId, $this->actorId)) {
             return;
         }
 
@@ -78,7 +79,7 @@ class CreateNotification implements ShouldQueue
         }
 
         $what = match ($this->type) {
-            'like' => 'đã thích bài viết của bạn',
+            'like' => $this->likeText(),
             'comment' => 'đã bình luận bài viết của bạn',
             'share' => 'đã chia sẻ bài viết của bạn',
             'friend_request' => 'đã gửi lời mời kết bạn',
@@ -95,5 +96,15 @@ class CreateNotification implements ShouldQueue
             'actorId' => $this->actorId,
             'postId' => $this->postId,
         ]);
+    }
+
+    /** "đã thích bài viết của bạn", or the reaction that was left (read now, it may have changed while queued). */
+    private function likeText(): string
+    {
+        $reaction = DB::table('post_likes')->where('post_id', $this->postId)->where('user_id', $this->actorId)->value('reaction');
+
+        return in_array($reaction, [null, 'like'], true)
+            ? 'đã thích bài viết của bạn'
+            : 'đã bày tỏ cảm xúc '.PostInteractionController::REACTION_EMOJIS[$reaction].' về bài viết của bạn';
     }
 }

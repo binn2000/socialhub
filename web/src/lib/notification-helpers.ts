@@ -1,28 +1,46 @@
 import {
-  Heart,
   MessageCircle,
   Share2,
   UserCheck,
+  ThumbsUp,
   UserPlus,
 } from "lucide-react";
 import type { NotificationType } from "@/types";
+import { POST_REACTIONS, type PostReactionType } from "@/lib/post-constants";
 
 export interface NotificationMeta {
   description: string;
   icon: React.ComponentType<{ className?: string }>;
   iconColor: string;
   category: "interactions" | "friends";
+  /** The emoji of a reaction notification; shown instead of the icon. */
+  emoji?: string;
 }
 
-export function getNotificationMeta(type: NotificationType): NotificationMeta {
+export function getNotificationMeta(
+  type: NotificationType,
+  reaction?: PostReactionType | null
+): NotificationMeta {
   switch (type) {
-    case "like":
+    case "like": {
+      const chosen = POST_REACTIONS.find((r) => r.type === reaction);
+      // A plain Thích (or an unknown reaction) keeps the thumb; the others show their own emoji.
+      if (chosen && chosen.type !== "like") {
+        return {
+          description: `đã bày tỏ cảm xúc ${chosen.emoji} về bài viết của bạn`,
+          icon: ThumbsUp,
+          emoji: chosen.emoji,
+          iconColor: "bg-surface-muted dark:bg-surface-dark-muted",
+          category: "interactions",
+        };
+      }
       return {
         description: "đã thích bài viết của bạn",
-        icon: Heart,
-        iconColor: "text-rose-500 bg-rose-50 dark:bg-rose-950/50",
+        icon: ThumbsUp,
+        iconColor: "text-[#0866FF] bg-blue-50 dark:bg-blue-950/50",
         category: "interactions",
       };
+    }
     case "comment":
       return {
         description: "đã bình luận trong bài viết của bạn",
