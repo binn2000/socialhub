@@ -72,6 +72,7 @@ class HomeScreen extends StatefulWidget {
 
   /// Sends a quick emoji to the author of a story (server only).
   final void Function(Story story, String emoji)? onReactToStory;
+  final void Function(Story story, String text)? onReplyToStory;
 
   /// Plays the song of a story in the story viewer.
   final AudioPreview audio;
@@ -104,6 +105,7 @@ class HomeScreen extends StatefulWidget {
     this.onDeleteStory,
     this.onChangeStoryPrivacy,
     this.onReactToStory,
+    this.onReplyToStory,
     this.audio = const NoAudioPreview(),
   });
 
@@ -126,6 +128,7 @@ class _HomeScreenState extends State<HomeScreen> {
               onDelete: widget.onDeleteStory,
               onChangePrivacy: widget.onChangeStoryPrivacy,
               onReact: widget.onReactToStory,
+              onReply: widget.onReplyToStory,
               audio: widget.audio,
             ),
         transitionsBuilder:

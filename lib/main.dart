@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_learning/data/chat_stickers.dart';
+import 'package:flutter_learning/data/quick_reactions.dart';
 import 'package:flutter_learning/models/friend_request.dart';
 import 'package:flutter_learning/models/message.dart';
 import 'package:flutter_learning/models/notification.dart';
@@ -632,6 +633,7 @@ class _MainScreenState extends State<MainScreen> {
           onDelete: _handleDeleteStory,
           onChangePrivacy: _handleStoryPrivacy,
           onReact: widget.api.isRemote ? _reactToStory : null,
+          onReply: widget.api.isRemote ? _replyToStory : null,
           audio: widget.audio,
         ),
       ),
@@ -689,6 +691,20 @@ class _MainScreenState extends State<MainScreen> {
     story.user,
     'Đã phản hồi tin của bạn: $emoji',
     'Đã phản hồi tin với $emoji',
+  );
+
+  // Same texts as the web (stories/page.tsx, ViewNoteModal.tsx), so both
+  // people read the same message whichever app answered.
+  void _replyToStory(Story story, String text) => _sendQuickMessage(
+    story.user,
+    'Đã phản hồi tin của bạn: $text',
+    'Đã gửi phản hồi tin',
+  );
+
+  void _replyToNote(UserModel author, String text) => _sendQuickMessage(
+    author,
+    'Đã phản hồi ghi chú của bạn: $text',
+    'Đã gửi phản hồi ghi chú',
   );
 
   /// Changes who can see one of my stories; undone with a message if refused.
@@ -1495,11 +1511,13 @@ class _MainScreenState extends State<MainScreen> {
       MaterialPageRoute(
         builder: (_) => MessagesScreen(
           onReactToNote: widget.api.isRemote ? _reactToNote : null,
+          onReplyToNote: widget.api.isRemote ? _replyToNote : null,
           onReactToMessage: widget.api.isRemote ? _reactToMessage : null,
           onRecallMessage: widget.api.isRemote ? _recallMessage : null,
           onHideMessage: widget.api.isRemote ? _hideMessage : null,
           onPinMessage: widget.api.isRemote ? _pinMessage : null,
           onChangeTheme: widget.api.isRemote ? _setTheme : null,
+          onChangeQuickReaction: widget.api.isRemote ? _setQuickReaction : null,
           loadMedia: widget.api.isRemote ? _loadMedia : null,
           conversations: _conversations,
           notes: widget.api.isRemote ? _notes : null,
@@ -1560,6 +1578,9 @@ class _MainScreenState extends State<MainScreen> {
               partnerReadId: conversation.partnerReadId,
               pinnedMessage: conversation.pinnedMessage,
               theme: _pendingThemes[conversation.id] ?? conversation.theme,
+              quickReaction:
+                  _pendingQuickReactions[conversation.id] ??
+                  conversation.quickReaction,
             ),
         ];
         _conversations
@@ -1642,6 +1663,9 @@ class _MainScreenState extends State<MainScreen> {
             pinnedMessage: poll.pinnedMessage,
             clearPinnedMessage: poll.pinnedMessage == null,
             theme: _pendingThemes.containsKey(id) ? null : poll.theme,
+            quickReaction: _pendingQuickReactions.containsKey(id)
+                ? null
+                : poll.quickReaction,
           ),
         );
       }
@@ -1828,6 +1852,9 @@ class _MainScreenState extends State<MainScreen> {
               onChangeTheme: widget.api.isRemote
                   ? (theme) => _setTheme(conversation.id, theme)
                   : null,
+              onChangeQuickReaction: widget.api.isRemote
+                  ? (emoji) => _setQuickReaction(conversation.id, emoji)
+                  : null,
               loadMedia: widget.api.isRemote
                   ? ({required images, cursor}) => _loadMedia(
                       conversation.id,
@@ -1975,6 +2002,36 @@ class _MainScreenState extends State<MainScreen> {
       ).showSnackBar(SnackBar(content: Text(error.displayMessage)));
     } finally {
       _pendingThemes.remove(conversationId);
+    }
+  }
+
+  final Map<String, String> _pendingQuickReactions = {};
+
+  /// Same as the theme: shown at once, undone if the server refuses.
+  Future<void> _setQuickReaction(String conversationId, String emoji) async {
+    final previous = _findConversation(conversationId)?.quickReaction;
+    _pendingQuickReactions[conversationId] = emoji;
+    _updateConversation(
+      conversationId,
+      (current) => _copyConversation(current, quickReaction: emoji),
+    );
+    try {
+      await _guard(() => widget.api.setQuickReaction(conversationId, emoji));
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      _updateConversation(
+        conversationId,
+        (current) => _copyConversation(
+          current,
+          quickReaction: previous ?? kDefaultQuickReaction,
+        ),
+      );
+      if (error.isUnauthenticated) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.displayMessage)));
+    } finally {
+      _pendingQuickReactions.remove(conversationId);
     }
   }
 
@@ -2180,6 +2237,7 @@ class _MainScreenState extends State<MainScreen> {
     ChatMessage? pinnedMessage,
     bool clearPinnedMessage = false,
     String? theme,
+    String? quickReaction,
   }) {
     return Conversation(
       id: conversation.id,
@@ -2194,6 +2252,7 @@ class _MainScreenState extends State<MainScreen> {
           ? null
           : (pinnedMessage ?? conversation.pinnedMessage),
       theme: theme ?? conversation.theme,
+      quickReaction: quickReaction ?? conversation.quickReaction,
     );
   }
 
@@ -2447,6 +2506,7 @@ class _MainScreenState extends State<MainScreen> {
         onDeleteStory: widget.api.isRemote ? _handleDeleteStory : null,
         onChangeStoryPrivacy: widget.api.isRemote ? _handleStoryPrivacy : null,
         onReactToStory: widget.api.isRemote ? _reactToStory : null,
+        onReplyToStory: widget.api.isRemote ? _replyToStory : null,
         audio: widget.audio,
       ),
       ExploreScreen(

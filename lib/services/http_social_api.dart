@@ -762,6 +762,7 @@ class HttpSocialApi extends SocialApi {
                   absoluteUrl: _absoluteUrl,
                 ),
           theme: meta['theme'] as String?,
+          quickReaction: meta['quickReaction'] as String?,
         );
       }
       after = page.last.id;
@@ -812,6 +813,15 @@ class HttpSocialApi extends SocialApi {
       'PUT',
       '/conversations/$conversationId/theme',
       data: {'theme': theme},
+    );
+  }
+
+  @override
+  Future<void> setQuickReaction(String conversationId, String emoji) async {
+    await _request(
+      'PUT',
+      '/conversations/$conversationId/quick-reaction',
+      data: {'emoji': emoji},
     );
   }
 

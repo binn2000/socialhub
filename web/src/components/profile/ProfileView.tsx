@@ -427,7 +427,7 @@ export function ProfileView({ userId }: ProfileViewProps) {
             <button
               type="button"
               onClick={() => coverInputRef.current?.click()}
-              className="absolute bottom-4 right-4 z-10 px-3.5 py-2 rounded-xl bg-black/60 hover:bg-black/80 text-white text-xs font-semibold backdrop-blur-md transition flex items-center gap-1.5 shadow-md active:scale-95"
+              className="absolute bottom-4 right-4 z-30 px-3.5 py-2 rounded-xl bg-black/60 hover:bg-black/80 text-white text-xs font-semibold backdrop-blur-md transition flex items-center gap-1.5 shadow-md active:scale-95 cursor-pointer"
             >
               <Camera className="w-4 h-4" />
               <span>Đổi ảnh bìa</span>

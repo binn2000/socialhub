@@ -9,7 +9,9 @@ import 'package:flutter_learning/models/message.dart';
 import 'package:flutter_learning/utils/chat_search.dart';
 import 'package:flutter_learning/utils/message_status.dart';
 import 'package:flutter_learning/models/user.dart';
+import 'package:flutter_learning/data/quick_reactions.dart';
 import 'package:flutter_learning/services/social_api.dart' show MediaPage;
+import 'package:flutter_learning/widgets/quick_reaction_picker.dart';
 import 'package:flutter_learning/theme/app_tokens.dart';
 import 'package:flutter_learning/widgets/image_viewer.dart';
 import 'package:flutter_learning/screens/chat_detail_screen.dart';
@@ -44,6 +46,9 @@ class ChatScreen extends StatefulWidget {
   /// Server only: chooses the bubble theme for both people, and lists every
   /// picture or file of the chat (the loaded messages are only the latest).
   final Future<void> Function(String theme)? onChangeTheme;
+
+  /// Server only: chooses the emoji of the quick send button for both people.
+  final Future<void> Function(String emoji)? onChangeQuickReaction;
   final Future<MediaPage> Function({required bool images, String? cursor})?
   loadMedia;
 
@@ -75,6 +80,7 @@ class ChatScreen extends StatefulWidget {
     this.onPinMessage,
     this.onUnpinMessage,
     this.onChangeTheme,
+    this.onChangeQuickReaction,
     this.loadMedia,
     this.isPartnerTyping = false,
     this.onTyping,
@@ -119,6 +125,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // Chat theme state
   String _chatThemeId = 'blue';
+  String _localQuickReaction = kDefaultQuickReaction;
 
   Conversation get _conversation => widget.conversations.firstWhere(
     (conversation) => conversation.id == widget.conversationId,
@@ -612,6 +619,44 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  /// Shared on a server (the conversation's), a local choice on the mock app.
+  String get _quickReaction => widget.onChangeQuickReaction != null
+      ? quickReactionOf(_conversation.quickReaction)
+      : _localQuickReaction;
+
+  Future<void> _chooseQuickReaction() async {
+    final emoji = await showQuickReactionPicker(
+      context,
+      current: _quickReaction,
+    );
+    if (!mounted || emoji == null || emoji == _quickReaction) return;
+    if (widget.onChangeQuickReaction != null) {
+      await widget.onChangeQuickReaction!(emoji);
+    } else {
+      setState(() => _localQuickReaction = emoji);
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Đã đổi biểu tượng cảm xúc nhanh thành $emoji'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  /// The emoji that replaces the send button when the box is empty; it
+  /// answers the message being replied to, like a sticker does.
+  void _sendQuickLike() {
+    final like = _quickReaction;
+    widget.onSendMessage(
+      _replyingTo != null
+          ? buildChatMessageReplyPayload(_replyingTo!, like)
+          : like,
+    );
+    widget.onTyping?.call(false);
+    setState(() => _replyingTo = null);
+  }
+
   void _sendSticker(StickerItem sticker) {
     var payload = '[sticker:${sticker.id}:${sticker.url}]';
     if (_replyingTo != null) {
@@ -643,6 +688,8 @@ class _ChatScreenState extends State<ChatScreen> {
           unsentMessageIds: _unsentMessageIds,
           refresh: widget.refresh,
           loadMedia: widget.loadMedia,
+          quickReactionOf: () => _quickReaction,
+          onChooseQuickReaction: _chooseQuickReaction,
           onThemeChanged: (newThemeId) {
             if (widget.onChangeTheme != null) {
               widget.onChangeTheme!(newThemeId);
@@ -1791,13 +1838,57 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      FloatingActionButton.small(
-                        onPressed: _sendMessage,
-                        tooltip: 'Gửi tin nhắn',
-                        backgroundColor: selectedTheme.primaryColor,
-                        foregroundColor: selectedTheme.textColor,
-                        elevation: 0,
-                        child: const Icon(Icons.send_rounded),
+                      // Messenger style: with nothing to send the button
+                      // sends a 👍 instead. Only this button rebuilds while typing.
+                      ValueListenableBuilder<TextEditingValue>(
+                        valueListenable: _messageController,
+                        builder: (context, value, _) {
+                          final hasContent =
+                              value.text.trim().isNotEmpty ||
+                              _pendingAttachmentPaths.isNotEmpty;
+                          if (!hasContent) {
+                            final emoji = _quickReaction;
+                            // Tap sends, long press chooses another emoji.
+                            return Tooltip(
+                              message: 'Gửi $emoji (giữ để đổi biểu tượng)',
+                              child: Semantics(
+                                button: true,
+                                label: 'Gửi biểu tượng cảm xúc nhanh $emoji',
+                                child: InkResponse(
+                                  onTap: _sendQuickLike,
+                                  onLongPress: _chooseQuickReaction,
+                                  radius: 24,
+                                  child: SizedBox(
+                                    width: 44,
+                                    height: 44,
+                                    child: Center(
+                                      child: emoji == kDefaultQuickReaction
+                                          ? Icon(
+                                              Icons.thumb_up_rounded,
+                                              color: selectedTheme.primaryColor,
+                                              size: 26,
+                                            )
+                                          : Text(
+                                              emoji,
+                                              style: const TextStyle(
+                                                fontSize: 26,
+                                              ),
+                                            ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            );
+                          }
+                          return FloatingActionButton.small(
+                            onPressed: _sendMessage,
+                            tooltip: 'Gửi tin nhắn',
+                            backgroundColor: selectedTheme.primaryColor,
+                            foregroundColor: selectedTheme.textColor,
+                            elevation: 0,
+                            child: const Icon(Icons.send_rounded),
+                          );
+                        },
                       ),
                     ],
                   ),

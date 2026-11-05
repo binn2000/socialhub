@@ -26,6 +26,11 @@ class ChatDetailScreen extends StatefulWidget {
   final Set<String> deletedMessageIds;
   final Set<String> unsentMessageIds;
   final ValueChanged<String> onThemeChanged;
+
+  /// The emoji of the quick send button and how to change it (the chat opens
+  /// the picker, so a server or a local choice both work). Hidden when null.
+  final String Function()? quickReactionOf;
+  final Future<void> Function()? onChooseQuickReaction;
   final Listenable? refresh;
 
   /// Server only: pages of all pictures / files. Without it the lists are built
@@ -46,6 +51,8 @@ class ChatDetailScreen extends StatefulWidget {
     this.deletedMessageIds = const {},
     this.unsentMessageIds = const {},
     required this.onThemeChanged,
+    this.quickReactionOf,
+    this.onChooseQuickReaction,
     this.refresh,
     this.loadMedia,
     this.onOpenSearch,
@@ -255,6 +262,19 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                             _showThemePickerDialog(context);
                           },
                         ),
+                        if (widget.quickReactionOf != null &&
+                            widget.onChooseQuickReaction != null) ...[
+                          const SizedBox(width: 24),
+                          _buildQuickAction(
+                            context,
+                            emoji: widget.quickReactionOf!(),
+                            label: 'Cảm xúc nhanh',
+                            onTap: () async {
+                              await widget.onChooseQuickReaction!();
+                              _rebuild.value++;
+                            },
+                          ),
+                        ],
                       ],
                     ),
                   ],
@@ -604,7 +624,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
   Widget _buildQuickAction(
     BuildContext context, {
-    required IconData icon,
+    IconData? icon,
+    String? emoji,
     required String label,
     required VoidCallback onTap,
   }) {
@@ -621,7 +642,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               shape: BoxShape.circle,
               color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.8),
             ),
-            child: Icon(icon, size: 20, color: colorScheme.onSurface),
+            child: emoji != null
+                ? Center(
+                    child: Text(emoji, style: const TextStyle(fontSize: 20)),
+                  )
+                : Icon(icon, size: 20, color: colorScheme.onSurface),
           ),
           const SizedBox(height: 4),
           Text(

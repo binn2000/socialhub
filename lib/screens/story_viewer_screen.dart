@@ -28,6 +28,9 @@ class StoryViewerScreen extends StatefulWidget {
   /// Reaction callback when quick emoji reaction is tapped.
   final void Function(Story story, String emoji)? onReact;
 
+  /// Sends a written answer to the author of the story (server only).
+  final void Function(Story story, String text)? onReply;
+
   /// Plays the song of the story on show. Stories without a song are silent.
   final AudioPreview audio;
 
@@ -40,6 +43,7 @@ class StoryViewerScreen extends StatefulWidget {
     this.onDelete,
     this.onChangePrivacy,
     this.onReact,
+    this.onReply,
     this.audio = const NoAudioPreview(),
   });
 
@@ -56,6 +60,26 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
 
   String? _floatingEmoji;
   Timer? _floatingTimer;
+
+  final _replyController = TextEditingController();
+  final _replyFocus = FocusNode();
+
+  /// While the person writes an answer the story must stay on screen.
+  void _onReplyFocus() {
+    if (_replyFocus.hasFocus) {
+      _autoAdvanceTimer?.cancel();
+    } else {
+      _startAutoAdvance();
+    }
+  }
+
+  void _sendReply(Story story) {
+    final text = _replyController.text.trim();
+    if (text.isEmpty) return;
+    widget.onReply!(story, text);
+    _replyController.clear();
+    _replyFocus.unfocus();
+  }
 
   static const _quickEmojis = ['❤️', '🔥', '😂', '😮', '😢', '👏', '😍'];
 
@@ -88,6 +112,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
   void initState() {
     super.initState();
     _stories = List.of(widget.stories);
+    _replyFocus.addListener(_onReplyFocus);
     if (_stories.isEmpty) {
       _currentIndex = 0;
       _pageController = PageController();
@@ -110,12 +135,15 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
     widget.audio.stop();
     _autoAdvanceTimer?.cancel();
     _floatingTimer?.cancel();
+    _replyFocus.dispose();
+    _replyController.dispose();
     _pageController.dispose();
     super.dispose();
   }
 
   void _startAutoAdvance() {
     _autoAdvanceTimer?.cancel();
+    if (_replyFocus.hasFocus) return;
     _autoAdvanceTimer = Timer(const Duration(seconds: 4), () {
       if (!mounted) return;
       final nextIndex = _currentIndex + 1;
@@ -173,6 +201,66 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
     }
     widget.onDelete!(story);
     Navigator.pop(context);
+  }
+
+  Widget _buildReplyBar(Story story) {
+    return Row(
+      children: [
+        Expanded(
+          child: TextField(
+            controller: _replyController,
+            focusNode: _replyFocus,
+            style: const TextStyle(color: Colors.white),
+            cursorColor: Colors.white,
+            textInputAction: TextInputAction.send,
+            onSubmitted: (_) => _sendReply(story),
+            decoration: InputDecoration(
+              hintText: 'Gửi tin nhắn cho ${story.user.name}...',
+              hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.7)),
+              isDense: true,
+              filled: true,
+              fillColor: Colors.black.withValues(alpha: 0.45),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 12,
+              ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(24),
+                borderSide: BorderSide(
+                  color: Colors.white.withValues(alpha: 0.3),
+                ),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(24),
+                borderSide: BorderSide(
+                  color: Colors.white.withValues(alpha: 0.3),
+                ),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(24),
+                borderSide: const BorderSide(color: Colors.white),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: _replyController,
+          builder: (context, value, _) => IconButton(
+            tooltip: 'Gửi phản hồi',
+            onPressed: value.text.trim().isEmpty
+                ? null
+                : () => _sendReply(story),
+            icon: Icon(
+              Icons.send_rounded,
+              color: value.text.trim().isEmpty
+                  ? Colors.white.withValues(alpha: 0.4)
+                  : Colors.white,
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   @override
@@ -352,7 +440,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                       bottom:
                           (widget.onReact != null &&
                               story.user.id != widget.currentUserId)
-                          ? 78
+                          ? (widget.onReply != null ? 134 : 78)
                           : 32,
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -426,6 +514,14 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                         ],
                       ),
                     ),
+                    if (widget.onReply != null &&
+                        story.user.id != widget.currentUserId)
+                      Positioned(
+                        left: 16,
+                        right: 16,
+                        bottom: widget.onReact != null ? 72 : 16,
+                        child: _buildReplyBar(story),
+                      ),
                     if (widget.onReact != null &&
                         story.user.id != widget.currentUserId)
                       Positioned(

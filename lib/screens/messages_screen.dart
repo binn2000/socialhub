@@ -34,6 +34,7 @@ class MessagesScreen extends StatefulWidget {
 
   /// Sends a quick emoji to the author of a note (server only).
   final void Function(UserModel user, String emoji)? onReactToNote;
+  final void Function(UserModel user, String text)? onReplyToNote;
 
   /// Server only, for the chat shown beside the list on a wide screen.
   final Future<void> Function(
@@ -55,6 +56,8 @@ class MessagesScreen extends StatefulWidget {
   /// files (server only).
   final Future<void> Function(String conversationId, String theme)?
   onChangeTheme;
+  final Future<void> Function(String conversationId, String emoji)?
+  onChangeQuickReaction;
   final Future<MediaPage> Function(
     String conversationId, {
     required bool images,
@@ -100,11 +103,13 @@ class MessagesScreen extends StatefulWidget {
     this.friends,
     this.onStartConversation,
     this.onReactToNote,
+    this.onReplyToNote,
     this.onReactToMessage,
     this.onRecallMessage,
     this.onHideMessage,
     this.onPinMessage,
     this.onChangeTheme,
+    this.onChangeQuickReaction,
     this.loadMedia,
     this.onSearchConversations,
     this.notes,
@@ -282,6 +287,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
             onDeleteNote: widget.onDeleteNote!,
             onReply: widget.onStartConversation!,
             onReact: widget.onReactToNote,
+            onReplyText: widget.onReplyToNote,
             searchMusic: widget.onSearchMusic,
             audio: widget.audio,
           ),
@@ -513,6 +519,13 @@ class _MessagesScreenState extends State<MessagesScreen> {
                                 ? null
                                 : (theme) =>
                                       widget.onChangeTheme!(activeId, theme),
+                            onChangeQuickReaction:
+                                widget.onChangeQuickReaction == null
+                                ? null
+                                : (emoji) => widget.onChangeQuickReaction!(
+                                    activeId,
+                                    emoji,
+                                  ),
                             loadMedia: widget.loadMedia == null
                                 ? null
                                 : ({required images, cursor}) =>

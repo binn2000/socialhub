@@ -345,12 +345,12 @@ export default function EditProfilePage() {
             <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent pointer-events-none" />
 
             {/* Cover Action Buttons */}
-            <div className="absolute bottom-3 right-3 sm:bottom-4 sm:right-4 flex items-center gap-2 z-10">
+            <div className="absolute bottom-3 right-3 sm:bottom-4 sm:right-4 flex items-center gap-2 z-30">
               <button
                 type="button"
                 disabled={uploadingCover}
                 onClick={() => coverInputRef.current?.click()}
-                className="px-3.5 py-1.5 rounded-xl bg-black/60 hover:bg-black/80 text-white text-xs font-semibold backdrop-blur-md transition flex items-center gap-1.5 shadow-md active:scale-95"
+                className="px-3.5 py-1.5 rounded-xl bg-black/60 hover:bg-black/80 text-white text-xs font-semibold backdrop-blur-md transition flex items-center gap-1.5 shadow-md active:scale-95 cursor-pointer disabled:cursor-not-allowed"
               >
                 <Camera className="w-3.5 h-3.5" />
                 <span>{uploadingCover ? "Đang tải..." : "Đổi ảnh bìa"}</span>
@@ -360,7 +360,7 @@ export default function EditProfilePage() {
                   type="button"
                   disabled={uploadingCover}
                   onClick={handleRemoveCover}
-                  className="p-1.5 rounded-xl bg-black/60 hover:bg-black/80 text-white text-xs backdrop-blur-md transition shadow-md active:scale-95"
+                  className="p-1.5 rounded-xl bg-black/60 hover:bg-black/80 text-white text-xs backdrop-blur-md transition shadow-md active:scale-95 cursor-pointer disabled:cursor-not-allowed"
                   title="Gỡ ảnh bìa"
                 >
                   <Trash2 className="w-3.5 h-3.5" />

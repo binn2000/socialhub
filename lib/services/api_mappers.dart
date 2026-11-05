@@ -294,6 +294,7 @@ Conversation conversationFromJson(
             absoluteUrl: absoluteUrl,
           ),
     theme: json['theme'] as String?,
+    quickReaction: json['quickReaction'] as String?,
   );
 }
 

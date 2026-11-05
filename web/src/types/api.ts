@@ -1407,6 +1407,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/conversations/{conversation}/quick-reaction": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation: components["parameters"]["ConversationId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Choose the emoji of the quick send button for both people
+         * @description **Authentication:** required. **Authorization:** participants only. The button replaces "send" while the message box is empty and sends this emoji as a message. One of the listed emojis (with or without the U+FE0F variation selector); the canonical form is stored and returned.
+         */
+        put: operations["setQuickReaction"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/conversations/{conversation}/theme": {
         parameters: {
             query?: never;
@@ -2022,6 +2044,12 @@ export interface components {
             privacy?: components["schemas"]["Privacy"];
         };
         /**
+         * @description Emoji of the quick send button of a conversation, shared by both people.
+         * @default 👍
+         * @enum {string}
+         */
+        QuickReaction: "👍" | "❤️" | "😂" | "😮" | "😢" | "😡" | "🔥" | "🎉" | "👏" | "😍" | "🙏" | "💯";
+        /**
          * @description Bubble colour theme of a conversation, shared by both people.
          * @default blue
          * @enum {string}
@@ -2052,6 +2080,7 @@ export interface components {
             /** @description The message pinned for both people, or null (also null when it was recalled or the caller deleted it). */
             pinnedMessage: components["schemas"]["Message"] | null;
             theme?: components["schemas"]["ChatTheme"];
+            quickReaction?: components["schemas"]["QuickReaction"];
             participant: components["schemas"]["UserSummary"] & {
                 isOnline: components["schemas"]["IsOnline"];
                 lastSeenAt: components["schemas"]["LastSeenAt"];
@@ -2234,6 +2263,7 @@ export interface components {
                 partnerLastReadMessageId?: components["schemas"]["Id"] | null;
                 pinnedMessage?: components["schemas"]["Message"] | null;
                 theme?: components["schemas"]["ChatTheme"];
+                quickReaction?: components["schemas"]["QuickReaction"];
                 /** @description Only with `after`: what can still change on the latest 100 messages, keyed by message id, so an open chat can follow reactions and recalls. */
                 states?: {
                     [key: string]: {
@@ -4612,6 +4642,42 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    setQuickReaction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation: components["parameters"]["ConversationId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    emoji: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The emoji now in use. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            quickReaction: components["schemas"]["QuickReaction"];
+                        };
+                    };
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationFailed"];
             429: components["responses"]["TooManyRequests"];
         };
     };

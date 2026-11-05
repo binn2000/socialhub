@@ -85,6 +85,7 @@ Route::prefix('v1')->group(function () {
         Route::post('conversations/{conversation}/messages', [ConversationController::class, 'send'])->middleware(['throttle:messages', 'idempotent']);
         Route::put('conversations/{conversation}/typing', [ConversationController::class, 'typing']);
         Route::delete('conversations/{conversation}/typing', [ConversationController::class, 'stopTyping']);
+        Route::put('conversations/{conversation}/quick-reaction', [ConversationController::class, 'setQuickReaction'])->middleware('throttle:reactions');
         Route::put('conversations/{conversation}/theme', [ConversationController::class, 'setTheme'])->middleware('throttle:reactions');
         Route::get('conversations/{conversation}/media', [ConversationController::class, 'media']);
         Route::put('conversations/{conversation}/pin', [ConversationController::class, 'pin'])->middleware('throttle:reactions');

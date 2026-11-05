@@ -35,6 +35,24 @@ class ConversationThemeAndMediaTest extends TestCase
         $this->getJson("/api/v1/conversations/$c/messages")->assertJsonPath('meta.theme', 'sunset');
     }
 
+    public function test_the_quick_reaction_is_shared_and_limited_to_the_list(): void
+    {
+        [$a, $b, $c] = $this->chat();
+        $this->postJson("/api/v1/conversations/$c/messages", ['text' => 'Chào'])->assertCreated();
+
+        $this->getJson('/api/v1/conversations')->assertJsonPath('data.0.quickReaction', '👍');
+        $this->putJson("/api/v1/conversations/$c/quick-reaction", ['emoji' => '🦄'])->assertUnprocessable();
+        // Without the variation selector it is still the same heart.
+        $this->putJson("/api/v1/conversations/$c/quick-reaction", ['emoji' => "\u{2764}"])
+            ->assertOk()->assertJsonPath('data.quickReaction', '❤️');
+
+        $this->actingAs($b, 'sanctum')->getJson('/api/v1/conversations')->assertJsonPath('data.0.quickReaction', '❤️');
+        $this->getJson("/api/v1/conversations/$c/messages")->assertJsonPath('meta.quickReaction', '❤️');
+
+        $this->actingAs(User::factory()->create(), 'sanctum')
+            ->putJson("/api/v1/conversations/$c/quick-reaction", ['emoji' => '🔥'])->assertNotFound();
+    }
+
     public function test_a_stranger_cannot_change_the_theme(): void
     {
         [, , $c] = $this->chat();

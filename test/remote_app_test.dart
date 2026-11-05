@@ -2431,6 +2431,7 @@ void main() {
       await openChat(tester);
 
       await tester.enterText(find.byType(TextField), 'Đang gửi');
+      await tester.pump();
       await tester.tap(find.byTooltip('Gửi tin nhắn'));
       await tester.pump();
       await tester.pump(const Duration(seconds: 9));
@@ -5493,6 +5494,32 @@ void main() {
       expect(find.text('Nhắn tin...'), findsNothing); // the chat stays closed
     });
 
+    testWidgets('a written answer to a friend\'s note is sent to them', (
+      tester,
+    ) async {
+      final api = await openMessages(tester, notes: [lanNote()]);
+
+      await tester.tap(find.text('Đang đi cà phê ☕'));
+      await tester.pumpAndSettle();
+      // Nothing written yet: the send button does nothing.
+      await tester.tap(find.byTooltip('Gửi'));
+      await tester.pumpAndSettle();
+      expect(api.sentMessages, isEmpty);
+
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Nhắn tin cho Lan Hương...'),
+        'Cho mình đi với',
+      );
+      await tester.pump();
+      await tester.tap(find.byTooltip('Gửi'));
+      await tester.pumpAndSettle();
+
+      expect(api.sentMessages, [
+        'conv_lan|Đã phản hồi ghi chú của bạn: Cho mình đi với',
+      ]);
+      expect(find.text('Đã gửi phản hồi ghi chú'), findsOneWidget);
+    });
+
     testWidgets('the notes are loaded with the app and again with Messages', (
       tester,
     ) async {
@@ -5784,6 +5811,35 @@ void main() {
 
       expect(api.sentMessages, ['conv_lan|Đã phản hồi tin của bạn: 😍']);
       expect(find.text('Đã phản hồi tin với 😍'), findsWidgets);
+      await tester.pump(const Duration(seconds: 6));
+    });
+
+    testWidgets('a written answer to a story is sent and holds the story', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me)
+        ..stories = [_story('s1', _lan)];
+      await _pump(tester, api);
+
+      await tester.tap(find.text('Lan'));
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump();
+      final field = find.widgetWithText(
+        TextField,
+        'Gửi tin nhắn cho Lan Hương...',
+      );
+      await tester.tap(field);
+      await tester.pump();
+      await tester.enterText(field, 'Đẹp quá');
+      // Writing keeps the story open past its 4 seconds.
+      await tester.pump(const Duration(seconds: 6));
+      expect(field, findsOneWidget);
+
+      await tester.tap(find.byTooltip('Gửi phản hồi'));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(api.sentMessages, ['conv_lan|Đã phản hồi tin của bạn: Đẹp quá']);
+      expect(find.text('Đã gửi phản hồi tin'), findsWidgets);
       await tester.pump(const Duration(seconds: 6));
     });
 

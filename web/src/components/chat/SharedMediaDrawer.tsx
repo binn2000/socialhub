@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { UserAvatar } from "@/components/ui/UserAvatar";
 import { CHAT_THEMES, getChatTheme } from "@/lib/chat-theme";
+import { QUICK_REACTIONS } from "@/lib/quick-reactions";
 import { timeAgo } from "@/lib/time-ago";
 import { clientFetch } from "@/lib/client-api";
 import type { Conversation, Message } from "@/types";
@@ -52,6 +53,8 @@ interface SharedMediaDrawerProps {
   messages: Message[];
   currentThemeId: string;
   onSelectTheme: (themeId: string) => void;
+  quickReaction: string;
+  onSelectQuickReaction: (emoji: string) => void;
   onSelectImage: (imageUrl: string) => void;
   pinnedMessage?: Message;
   onJumpToMessage?: (msgId: string) => void;
@@ -65,6 +68,8 @@ export function SharedMediaDrawer({
   messages,
   currentThemeId,
   onSelectTheme,
+  quickReaction,
+  onSelectQuickReaction,
   onSelectImage,
   pinnedMessage,
   onJumpToMessage,
@@ -235,6 +240,31 @@ export function SharedMediaDrawer({
                   </button>
                 );
               })}
+            </div>
+          </div>
+
+          {/* Quick send emoji (the button shown while the message box is empty) */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-appText-secondary">
+                Biểu tượng cảm xúc nhanh
+              </span>
+              <span className="text-lg leading-none">{quickReaction}</span>
+            </div>
+            <div className="grid grid-cols-6 gap-1 bg-white dark:bg-surface-dark p-2 rounded-xl border border-appBorder-light dark:border-appBorder-dark">
+              {QUICK_REACTIONS.map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  onClick={() => onSelectQuickReaction(emoji)}
+                  className={`text-xl p-1 rounded-lg hover:scale-110 transition cursor-pointer ${
+                    emoji === quickReaction ? "bg-brand/10 ring-1 ring-brand" : "hover:bg-surface-muted dark:hover:bg-surface-dark-muted"
+                  }`}
+                  title={`Dùng ${emoji}`}
+                >
+                  {emoji}
+                </button>
+              ))}
             </div>
           </div>
 

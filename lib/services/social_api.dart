@@ -71,6 +71,7 @@ class MessagePoll {
 
   /// The shared bubble theme id, when the server said it.
   final String? theme;
+  final String? quickReaction;
 
   const MessagePoll({
     this.messages = const [],
@@ -81,6 +82,7 @@ class MessagePoll {
     this.partnerReadId,
     this.pinnedMessage,
     this.theme,
+    this.quickReaction,
   });
 }
 
@@ -366,6 +368,9 @@ abstract class SocialApi {
     String conversationId,
     String theme,
   ) async {}
+
+  /// Chooses the emoji of the quick send button for both people (server only).
+  Future<void> setQuickReaction(String conversationId, String emoji) async {}
 
   /// Every picture ([images] true) or document of a conversation, newest first,
   /// paged (server only; the mock app has no such list).

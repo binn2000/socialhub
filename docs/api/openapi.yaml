@@ -2035,6 +2035,34 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
 
+  /conversations/{conversation}/quick-reaction:
+    parameters:
+      - {$ref: '#/components/parameters/ConversationId'}
+    put:
+      tags: [Conversations]
+      operationId: setQuickReaction
+      summary: Choose the emoji of the quick send button for both people
+      description: '**Authentication:** required. **Authorization:** participants only. The button replaces "send" while the message box is empty and sends this emoji as a message. One of the listed emojis (with or without the U+FE0F variation selector); the canonical form is stored and returned.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [emoji]
+              properties:
+                emoji: {type: string}
+      responses:
+        '200':
+          description: The emoji now in use.
+          content:
+            application/json:
+              schema: {type: object, required: [data], properties: {data: {type: object, required: [quickReaction], properties: {quickReaction: {$ref: '#/components/schemas/QuickReaction'}}}}}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+
   /conversations/{conversation}/theme:
     parameters:
       - {$ref: '#/components/parameters/ConversationId'}
@@ -2888,6 +2916,11 @@ components:
         privacy: {$ref: '#/components/schemas/Privacy'}
 
     # ------------------------------------------------------------ conversations
+    QuickReaction:
+      type: string
+      enum: ['👍', '❤️', '😂', '😮', '😢', '😡', '🔥', '🎉', '👏', '😍', '🙏', '💯']
+      default: '👍'
+      description: 'Emoji of the quick send button of a conversation, shared by both people.'
     ChatTheme:
       type: string
       enum: [blue, purple, sunset, midnight, emerald]
@@ -2948,6 +2981,8 @@ components:
           description: 'The message pinned for both people, or null (also null when it was recalled or the caller deleted it).'
         theme:
           $ref: '#/components/schemas/ChatTheme'
+        quickReaction:
+          $ref: '#/components/schemas/QuickReaction'
         participant:
           allOf:
             - $ref: '#/components/schemas/UserSummary'
@@ -3176,6 +3211,8 @@ components:
                     - type: 'null'
                 theme:
                   $ref: '#/components/schemas/ChatTheme'
+                quickReaction:
+                  $ref: '#/components/schemas/QuickReaction'
                 states:
                   type: object
                   description: 'Only with `after`: what can still change on the latest 100 messages, keyed by message id, so an open chat can follow reactions and recalls.'

@@ -25,6 +25,9 @@ class NotesRow extends StatelessWidget {
   /// Sends a quick emoji to the author of a note (server only).
   final void Function(UserModel user, String emoji)? onReact;
 
+  /// Sends a written answer to the author of a note (server only).
+  final void Function(UserModel user, String text)? onReplyText;
+
   /// Finding and previewing a song for a note.
   final Future<List<MusicTrack>> Function(String query)? searchMusic;
   final AudioPreview audio;
@@ -37,6 +40,7 @@ class NotesRow extends StatelessWidget {
     required this.onDeleteNote,
     required this.onReply,
     this.onReact,
+    this.onReplyText,
     this.searchMusic,
     this.audio = const NoAudioPreview(),
   });
@@ -106,6 +110,7 @@ extension on NotesRow {
         audio: audio,
         onReply: onReply,
         onReact: onReact,
+        onReplyText: onReplyText,
       );
 }
 
@@ -117,6 +122,7 @@ Future<void> showNoteDetail(
   required AudioPreview audio,
   ValueChanged<UserModel>? onReply,
   void Function(UserModel user, String emoji)? onReact,
+  void Function(UserModel user, String text)? onReplyText,
 }) {
   final track = note.track;
   if (track != null) {
@@ -221,6 +227,16 @@ Future<void> showNoteDetail(
                 ),
               ),
             ],
+            if (onReplyText != null) ...[
+              const SizedBox(height: 12),
+              _ReplyField(
+                hint: 'Nhắn tin cho ${note.user.name}...',
+                onSend: (text) {
+                  Navigator.pop(sheetContext);
+                  onReplyText(note.user, text);
+                },
+              ),
+            ],
             if (onReply != null) ...[
               const SizedBox(height: 12),
               SizedBox(
@@ -239,6 +255,72 @@ Future<void> showNoteDetail(
       ),
     ),
   ).whenComplete(audio.stop);
+}
+
+/// A one-line answer box with a send button that only works with some text.
+class _ReplyField extends StatefulWidget {
+  final String hint;
+  final ValueChanged<String> onSend;
+
+  const _ReplyField({required this.hint, required this.onSend});
+
+  @override
+  State<_ReplyField> createState() => _ReplyFieldState();
+}
+
+class _ReplyFieldState extends State<_ReplyField> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _send() {
+    final text = _controller.text.trim();
+    if (text.isEmpty) return;
+    widget.onSend(text);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Row(
+      children: [
+        Expanded(
+          child: TextField(
+            controller: _controller,
+            textInputAction: TextInputAction.send,
+            onSubmitted: (_) => _send(),
+            decoration: InputDecoration(
+              hintText: widget.hint,
+              isDense: true,
+              filled: true,
+              fillColor: colorScheme.surfaceContainerHighest,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(24),
+                borderSide: BorderSide.none,
+              ),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 12,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: _controller,
+          builder: (context, value, _) => IconButton.filled(
+            tooltip: 'Gửi',
+            onPressed: value.text.trim().isEmpty ? null : _send,
+            icon: const Icon(Icons.send_rounded, size: 20),
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class _NoteItem extends StatelessWidget {

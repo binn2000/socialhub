@@ -103,6 +103,9 @@ class Conversation {
   /// Server only: the bubble theme id both people share (null = default).
   final String? theme;
 
+  /// Server only: the emoji of the quick send button (null = 👍).
+  final String? quickReaction;
+
   const Conversation({
     required this.id,
     required this.user,
@@ -114,5 +117,6 @@ class Conversation {
     this.partnerReadId,
     this.pinnedMessage,
     this.theme,
+    this.quickReaction,
   });
 }

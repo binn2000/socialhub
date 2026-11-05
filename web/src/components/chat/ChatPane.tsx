@@ -52,6 +52,15 @@ import { findMatchingMessageIds } from "@/lib/chat-search";
 import { ForwardMessageModal } from "./ForwardMessageModal";
 import { SharedMediaDrawer } from "./SharedMediaDrawer";
 import { getChatTheme } from "@/lib/chat-theme";
+import { QUICK_REACTIONS, DEFAULT_QUICK_REACTION, quickReactionOf } from "@/lib/quick-reactions";
+import {
+  CHAT_FILE_ACCEPT,
+  MAX_CHAT_FILES,
+  checkChatFiles,
+  describeRejected,
+  namePastedImage,
+  revokePreviews,
+} from "@/lib/chat-files";
 
 /** The extra things a messages answer carries (`meta`). */
 interface ChatMeta {
@@ -61,6 +70,7 @@ interface ChatMeta {
   partnerLastReadMessageId?: string | null;
   pinnedMessage?: Message | null;
   theme?: string;
+  quickReaction?: string;
 }
 
 interface ChatPaneProps {
@@ -153,6 +163,55 @@ export function ChatPane({
   // The theme belongs to the conversation on the server, so both people (and every device) see the same colours.
   // While my own change is on its way a poll must not put the old value back.
   const pendingThemeRef = useRef<string | null>(null);
+
+  // The emoji of the quick send button, shared like the theme.
+  const [quickReaction, setQuickReaction] = useState<string>(DEFAULT_QUICK_REACTION);
+  const pendingQuickRef = useRef<string | null>(null);
+  const [showQuickPicker, setShowQuickPicker] = useState(false);
+  const quickPickerRef = useRef<HTMLSpanElement>(null);
+
+  // A click anywhere else (or Esc) closes the picker.
+  useEffect(() => {
+    if (!showQuickPicker) return;
+    const onDown = (e: MouseEvent) => {
+      if (!quickPickerRef.current?.contains(e.target as Node)) setShowQuickPicker(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowQuickPicker(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [showQuickPicker]);
+
+  useEffect(() => {
+    setQuickReaction(DEFAULT_QUICK_REACTION);
+    pendingQuickRef.current = null;
+    setShowQuickPicker(false);
+  }, [conversationId]);
+
+  const handleSelectQuickReaction = useCallback(async (emoji: string) => {
+    setShowQuickPicker(false);
+    if (emoji === quickReaction) return;
+    const previous = quickReaction;
+    setQuickReaction(emoji);
+    pendingQuickRef.current = emoji;
+    try {
+      await clientFetch(`/conversations/${conversationId}/quick-reaction`, {
+        method: "PUT",
+        body: JSON.stringify({ emoji }),
+      });
+      toast.success(`Đã đổi biểu tượng cảm xúc nhanh thành ${emoji}`);
+    } catch {
+      setQuickReaction(previous);
+      toast.error("Không đổi được biểu tượng, vui lòng thử lại");
+    } finally {
+      pendingQuickRef.current = null;
+    }
+  }, [quickReaction, conversationId, toast]);
 
   useEffect(() => {
     setChatThemeId("blue");
@@ -321,6 +380,7 @@ export function ChatPane({
     if (meta.partnerLastReadMessageId !== undefined) setPartnerReadId(meta.partnerLastReadMessageId);
     if (meta.pinnedMessage !== undefined) setPinnedMessage(meta.pinnedMessage);
     if (meta.theme && pendingThemeRef.current === null) setChatThemeId(meta.theme);
+    if (meta.quickReaction && pendingQuickRef.current === null) setQuickReaction(quickReactionOf(meta.quickReaction));
   }, []);
 
   const loadInitialData = useCallback(async () => {
@@ -438,10 +498,16 @@ export function ChatPane({
 
   // 4. File handling (Picker, Paste, Drag & Drop)
   const addFilesToPending = useCallback(
-    (filesToAdd: File[]) => {
+    (candidates: File[]) => {
+      if (candidates.length === 0) return;
+
+      // One file the server does not take would make it refuse the whole message.
+      const { accepted: filesToAdd, rejected } = checkChatFiles(candidates);
+      const why = describeRejected(rejected);
+      if (why) toast.error(why);
       if (filesToAdd.length === 0) return;
 
-      const availableSlots = 5 - pendingFiles.length;
+      const availableSlots = MAX_CHAT_FILES - pendingFiles.length;
       if (availableSlots <= 0) {
         toast.info("Đã đạt giới hạn tối đa 5 tệp đính kèm");
         return;
@@ -475,28 +541,32 @@ export function ChatPane({
       const items = e.clipboardData?.items;
       if (!items) return;
 
-      const imageFiles: File[] = [];
+      const files: File[] = [];
+      let unsupportedImage = false;
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
+        if (item.kind !== "file") continue;
+        const file = item.getAsFile();
+        if (!file) continue;
         if (item.type.startsWith("image/")) {
-          const file = item.getAsFile();
-          if (file) {
-            const fileName =
-              file.name && file.name !== "image.png"
-                ? file.name
-                : `screenshot_${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
-            const namedFile = new File([file], fileName, { type: file.type });
-            imageFiles.push(namedFile);
-          }
+          // Screenshots arrive as "image.png" whatever their real type; the name decides
+          // what the server accepts, so it must match the type.
+          const named = namePastedImage(file);
+          if (named) files.push(named);
+          else unsupportedImage = true;
+        } else {
+          // A document copied in Finder / Explorer.
+          files.push(file);
         }
       }
 
-      if (imageFiles.length > 0) {
-        e.preventDefault();
-        addFilesToPending(imageFiles);
-      }
+      // Plain text keeps being pasted into the box as usual.
+      if (files.length === 0 && !unsupportedImage) return;
+      e.preventDefault();
+      if (unsupportedImage) toast.error("Chỉ dán được ảnh JPG, PNG hoặc WebP");
+      addFilesToPending(files);
     },
-    [addFilesToPending]
+    [addFilesToPending, toast]
   );
 
   // Drag & Drop handlers
@@ -506,15 +576,16 @@ export function ChatPane({
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    // Dragging selected text or a picture of the page itself is not a file to send.
+    if (!Array.from(e.dataTransfer.types).includes("Files")) return;
     dragCounterRef.current += 1;
-    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
-      setIsDraggingOver(true);
-    }
+    setIsDraggingOver(true);
   }, []);
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    if (dragCounterRef.current === 0) return;
     dragCounterRef.current -= 1;
     if (dragCounterRef.current <= 0) {
       dragCounterRef.current = 0;
@@ -544,8 +615,16 @@ export function ChatPane({
 
   const handleRemoveFile = (index: number) => {
     setPendingFiles((prev) => prev.filter((_, i) => i !== index));
-    setPendingPreviews((prev) => prev.filter((_, i) => i !== index));
+    setPendingPreviews((prev) => {
+      revokePreviews([prev[index]]);
+      return prev.filter((_, i) => i !== index);
+    });
   };
+
+  // Previews are object URLs: they hold the picture in memory until revoked.
+  const previewsRef = useRef<string[]>([]);
+  previewsRef.current = pendingPreviews;
+  useEffect(() => () => revokePreviews(previewsRef.current), []);
 
   // 5. Send Message
   const handleSendMessage = async (e?: React.FormEvent) => {
@@ -587,11 +666,43 @@ export function ChatPane({
       setInputText("");
       setReplyingTo(null);
       setPendingFiles([]);
+      revokePreviews(pendingPreviews);
       setPendingPreviews([]);
       setShowEmojiPicker(false);
       setTimeout(() => scrollToBottom(true), 50);
     } catch {
       toast.error("Không thể gửi tin nhắn. Vui lòng thử lại.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleSendQuickLike = async (emoji: string) => {
+    if (sending) return;
+    setSending(true);
+    handleTypingSignal(false);
+    const idempotencyKey = crypto.randomUUID();
+    const formData = new FormData();
+    // Like a sticker, the like answers the message being replied to.
+    formData.append("text", replyingTo ? buildReplyPayload(replyingTo, emoji) : emoji);
+
+    try {
+      const res = await clientFetch<{ data: Message }>(
+        `/api/proxy/conversations/${conversationId}/messages`,
+        {
+          method: "POST",
+          headers: {
+            "Idempotency-Key": idempotencyKey,
+          },
+          body: formData,
+        }
+      );
+
+      setMessages((prev) => [...prev, res.data]);
+      setReplyingTo(null);
+      setTimeout(() => scrollToBottom(true), 50);
+    } catch {
+      toast.error("Không thể gửi phản hồi nhanh");
     } finally {
       setSending(false);
     }
@@ -718,13 +829,31 @@ export function ChatPane({
         ref={fileInputRef}
         type="file"
         multiple
-        accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip"
+        accept={CHAT_FILE_ACCEPT}
         onChange={handlePickFiles}
         className="hidden"
       />
 
       {/* Main Chat Column */}
-      <div className="flex-1 flex flex-col h-full min-w-0 overflow-hidden relative">
+      <div
+        className="flex-1 flex flex-col h-full min-w-0 overflow-hidden relative"
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
+        {/* Drag & Drop Visual Overlay */}
+        {isDraggingOver && (
+          <div className="absolute inset-0 z-50 bg-brand/10 dark:bg-brand/20 backdrop-blur-sm border-2 border-dashed border-brand m-2 rounded-2xl flex flex-col items-center justify-center pointer-events-none select-none">
+            <div className="p-4 rounded-full bg-brand text-white mb-2 shadow-lg scale-110 animate-bounce">
+              <UploadCloud className="w-8 h-8" />
+            </div>
+            <p className="text-sm font-bold text-brand">Thả tệp vào đây để gửi</p>
+            <p className="text-xs text-appText-secondary dark:text-appText-dark-secondary mt-1">
+              Hỗ trợ kéo thả hình ảnh và tài liệu (tối đa 5 tệp)
+            </p>
+          </div>
+        )}
 
       {/* Header bar */}
       <div className="p-3.5 sm:px-6 bg-white dark:bg-surface-dark border-b border-appBorder-light dark:border-appBorder-dark flex items-center justify-between z-10 select-none">
@@ -1364,22 +1493,69 @@ export function ChatPane({
           type="text"
           value={inputText}
           onChange={handleInputChange}
-          placeholder="Nhập tin nhắn..."
+          onPaste={handlePaste}
+          placeholder="Nhập tin nhắn (hoặc dán ảnh Ctrl+V)..."
           className="flex-1 px-4 py-2.5 rounded-full border border-appBorder-light dark:border-appBorder-dark bg-surface-muted dark:bg-surface-dark-muted text-appText-primary dark:text-white text-sm outline-none focus:ring-2 focus:ring-brand focus:border-transparent placeholder-appText-secondary"
         />
 
-        <button
-          type="submit"
-          disabled={(!inputText.trim() && pendingFiles.length === 0) || sending}
-          className={`p-2.5 rounded-full ${activeTheme.sendBtnClass} disabled:opacity-40 disabled:cursor-not-allowed transition flex-shrink-0`}
-          title="Gửi"
-        >
-          {sending ? (
-            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-          ) : (
-            <Send className="w-4 h-4" />
-          )}
-        </button>
+        {inputText.trim().length > 0 || pendingFiles.length > 0 ? (
+          <button
+            type="submit"
+            disabled={(!inputText.trim() && pendingFiles.length === 0) || sending}
+            className={`p-2.5 rounded-full ${activeTheme.sendBtnClass} disabled:opacity-40 disabled:cursor-not-allowed transition flex-shrink-0 cursor-pointer shadow-sm active:scale-95`}
+            title="Gửi"
+          >
+            {sending ? (
+              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <Send className="w-4 h-4" />
+            )}
+          </button>
+        ) : (
+          <span ref={quickPickerRef} className="relative flex-shrink-0">
+            <button
+              type="button"
+              disabled={sending}
+              onClick={() => handleSendQuickLike(quickReaction)}
+              onContextMenu={(e) => {
+                // Right click (or a long press on a phone) chooses another emoji.
+                e.preventDefault();
+                setShowQuickPicker((v) => !v);
+              }}
+              className="p-1.5 text-brand hover:scale-125 active:scale-90 transition-transform cursor-pointer disabled:opacity-40"
+              title={`Gửi ${quickReaction} (chuột phải để đổi biểu tượng)`}
+              aria-label={`Gửi ${quickReaction}`}
+            >
+              {quickReaction === "👍" ? (
+                <ThumbsUp className="w-6 h-6 fill-current" />
+              ) : (
+                <span className="text-2xl leading-none">{quickReaction}</span>
+              )}
+            </button>
+            {showQuickPicker && (
+              <div
+                role="menu"
+                aria-label="Chọn biểu tượng cảm xúc nhanh"
+                className="absolute bottom-full right-0 mb-2 z-30 grid grid-cols-6 gap-1 p-2 rounded-2xl bg-white dark:bg-surface-dark border border-appBorder-light dark:border-appBorder-dark shadow-lg w-64"
+              >
+                {QUICK_REACTIONS.map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    role="menuitem"
+                    onClick={() => handleSelectQuickReaction(emoji)}
+                    className={`text-2xl p-1 rounded-lg hover:bg-surface-muted dark:hover:bg-surface-dark-muted hover:scale-110 transition cursor-pointer ${
+                      emoji === quickReaction ? "bg-brand/10 ring-1 ring-brand" : ""
+                    }`}
+                    title={`Dùng ${emoji}`}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            )}
+          </span>
+        )}
       </form>
 
       {/* Image Lightbox Viewer */}
@@ -1502,6 +1678,8 @@ export function ChatPane({
         messages={visibleMessages}
         currentThemeId={chatThemeId}
         onSelectTheme={handleSelectTheme}
+        quickReaction={quickReaction}
+        onSelectQuickReaction={handleSelectQuickReaction}
         onSelectImage={(url) => {
           setViewerImages([url]);
           setViewerIndex(0);

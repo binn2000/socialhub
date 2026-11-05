@@ -214,6 +214,7 @@ class ConversationController extends Controller
             'partnerLastReadMessageId' => $partner?->last_read_message_id,
             'pinnedMessage' => $this->pinnedFor($c, $me),
             'theme' => $c->theme ?? self::DEFAULT_THEME,
+            'quickReaction' => $c->quick_reaction ?? self::DEFAULT_QUICK_REACTION,
         ];
     }
 
@@ -259,6 +260,26 @@ class ConversationController extends Controller
     public const THEMES = ['blue', 'purple', 'sunset', 'midnight', 'emerald'];
 
     public const DEFAULT_THEME = 'blue';
+
+    /** What the quick send button (shown while the box is empty) can send. */
+    public const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '😡', '🔥', '🎉', '👏', '😍', '🙏', '💯'];
+
+    public const DEFAULT_QUICK_REACTION = '👍';
+
+    public function setQuickReaction(Request $request, string $conversation): array
+    {
+        $c = self::forParticipant($request, $conversation);
+        $data = $request->validate(['emoji' => ['required', 'string']]);
+        // Accept the emoji with or without the variation selector, store the canonical form.
+        $bare = fn (string $e) => str_replace("\u{FE0F}", '', $e);
+        $emoji = collect(self::QUICK_REACTIONS)->first(fn ($e) => $bare($e) === $bare($data['emoji']));
+        if ($emoji === null) {
+            throw ValidationException::withMessages(['emoji' => [__('validation.in', ['attribute' => 'emoji'])]]);
+        }
+        DB::table('conversations')->where('id', $c->id)->update(['quick_reaction' => $emoji]);
+
+        return ['data' => ['quickReaction' => $emoji]];
+    }
 
     public function setTheme(Request $request, string $conversation): array
     {
@@ -675,6 +696,8 @@ class ConversationController extends Controller
                 'partnerLastReadMessageId' => $partners[$c->id]->last_read_message_id ?? null,
                 'pinnedMessage' => $this->pinnedFor($c, $me),
                 'theme' => $c->theme ?? self::DEFAULT_THEME,
+                'quickReaction' => $c->quick_reaction ?? self::DEFAULT_QUICK_REACTION,
+                'quickReaction' => $c->quick_reaction ?? self::DEFAULT_QUICK_REACTION,
                 'unreadCount' => (int) ($unread[$c->id] ?? 0),
                 'updatedAt' => PostPresenter::timestamp(Carbon::parse($c->last_message_at ?? $c->created_at, 'UTC')),
             ];

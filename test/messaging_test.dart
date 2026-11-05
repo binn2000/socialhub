@@ -63,6 +63,7 @@ void main() {
 
     const messageText = 'Tin nhắn mới trong cuộc trò chuyện';
     await tester.enterText(find.byType(TextField), messageText);
+    await tester.pump();
     await tester.tap(find.byIcon(Icons.send_rounded));
     await tester.pumpAndSettle();
 
@@ -81,6 +82,7 @@ void main() {
 
     const messageText = 'Chỉ thuộc cuộc trò chuyện đầu tiên';
     await tester.enterText(find.byType(TextField), messageText);
+    await tester.pump();
     await tester.tap(find.byIcon(Icons.send_rounded));
     await tester.pumpAndSettle();
     await _returnToMessages(tester);
@@ -111,7 +113,11 @@ void main() {
       ),
     );
 
-    await tester.tap(find.byIcon(Icons.send_rounded));
+    // Only spaces: still nothing to send, so the 👍 button stays.
+    await tester.enterText(find.byType(TextField), '   ');
+    await tester.pump();
+    expect(find.byIcon(Icons.send_rounded), findsNothing);
+    await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pump();
 
     expect(sendCount, 0);
@@ -121,6 +127,86 @@ void main() {
     );
   });
 
+  testWidgets('a long press on the quick button chooses another emoji', (
+    tester,
+  ) async {
+    final sent = <String>[];
+    final chat = Conversation(
+      id: 'c',
+      user: mockUsers[1],
+      lastMessage: '',
+      time: '',
+      unreadCount: 0,
+      messages: const [],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          conversations: [chat],
+          conversationId: chat.id,
+          currentUser: currentUser,
+          onSendMessage: (text, {attachmentPaths}) => sent.add(text),
+        ),
+      ),
+    );
+
+    await tester.longPress(find.byTooltip('Gửi 👍 (giữ để đổi biểu tượng)'));
+    await tester.pumpAndSettle();
+    expect(find.text('Biểu tượng cảm xúc nhanh'), findsOneWidget);
+    await tester.tap(find.text('🔥'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Đã đổi biểu tượng cảm xúc nhanh thành 🔥'),
+      findsOneWidget,
+    );
+    // The message covers the input bar for a moment.
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Gửi 🔥 (giữ để đổi biểu tượng)'));
+    await tester.pump();
+    expect(sent, ['🔥']);
+  });
+
+  testWidgets('an empty box offers a quick 👍 instead of the send button', (
+    tester,
+  ) async {
+    final sent = <String>[];
+    final chat = Conversation(
+      id: 'c',
+      user: mockUsers[1],
+      lastMessage: '',
+      time: '',
+      unreadCount: 0,
+      messages: const [],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          conversations: [chat],
+          conversationId: chat.id,
+          currentUser: currentUser,
+          onSendMessage: (text, {attachmentPaths}) => sent.add(text),
+        ),
+      ),
+    );
+
+    expect(find.byIcon(Icons.send_rounded), findsNothing);
+    await tester.tap(find.byTooltip('Gửi 👍 (giữ để đổi biểu tượng)'));
+    await tester.pump();
+    expect(sent, ['👍']);
+
+    // Writing something brings the send button back.
+    await tester.enterText(find.byType(TextField), 'Chào');
+    await tester.pump();
+    expect(find.byTooltip('Gửi 👍 (giữ để đổi biểu tượng)'), findsNothing);
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send_rounded));
+    await tester.pump();
+    expect(sent, ['👍', 'Chào']);
+    expect(find.byTooltip('Gửi 👍 (giữ để đổi biểu tượng)'), findsOneWidget);
+  });
+
   testWidgets('sending updates the conversation time', (tester) async {
     await tester.pumpWidget(const SocialHubApp());
     await _openMessages(tester);
@@ -128,6 +214,7 @@ void main() {
 
     await _openConversation(tester, 'Minh Ánh');
     await tester.enterText(find.byType(TextField), 'Cập nhật giờ');
+    await tester.pump();
     await tester.tap(find.byIcon(Icons.send_rounded));
     await tester.pumpAndSettle();
     await _returnToMessages(tester);
@@ -142,6 +229,7 @@ void main() {
     await _openConversation(tester, 'Minh Ánh');
 
     await tester.enterText(find.byType(TextField), 'Chỉ cho Minh Ánh');
+    await tester.pump();
     await tester.tap(find.byIcon(Icons.send_rounded));
     await tester.pumpAndSettle();
     await _returnToMessages(tester);
@@ -160,7 +248,10 @@ void main() {
     await _openConversation(tester, 'Duy Khang');
 
     await tester.enterText(find.byType(TextField), '    ');
-    await tester.tap(find.byIcon(Icons.send_rounded));
+    await tester.pump();
+    // Spaces are nothing to send: the send button is not even offered.
+    expect(find.byIcon(Icons.send_rounded), findsNothing);
+    await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pumpAndSettle();
     await _returnToMessages(tester);
 
@@ -178,6 +269,7 @@ void main() {
     await _openMessages(tester);
     await _openConversation(tester, 'Minh Ánh');
     await tester.enterText(find.byType(TextField), 'Không đổi dữ liệu mock');
+    await tester.pump();
     await tester.tap(find.byIcon(Icons.send_rounded));
     await tester.pumpAndSettle();
 
