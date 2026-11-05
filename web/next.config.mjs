@@ -9,6 +9,8 @@ const contentSecurityPolicy = [
   "img-src 'self' data: blob: https: http://localhost:* http://127.0.0.1:*",
   "media-src 'self' blob: https: http://localhost:* http://127.0.0.1:*",
   "font-src 'self' data:",
+  // The Video tab plays YouTube with its embedded player (privacy-enhanced domain).
+  "frame-src https://www.youtube-nocookie.com",
   "connect-src 'self'",
   "object-src 'none'",
   "base-uri 'self'",

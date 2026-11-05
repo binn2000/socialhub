@@ -30,6 +30,7 @@ import { ReportModal } from "./ReportModal";
 import { ImageViewerModal } from "./ImageViewerModal";
 import { PostImageGrid } from "./PostImageGrid";
 import { CommentsModal } from "./CommentsModal";
+import { ConfirmModal } from "@/components/ui/ConfirmModal";
 import type { Post, Privacy } from "@/types";
 
 interface PostCardProps {
@@ -54,6 +55,20 @@ export function PostCard({
   const { user: currentUser } = useAuth();
   const { toast } = useToast();
   const [post, setPost] = useState<Post>(initialPost);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string | React.ReactNode;
+    confirmText?: string;
+    variant?: "danger" | "warning";
+    icon?: "danger" | "trash";
+    onConfirm: () => Promise<void> | void;
+  }>({
+    isOpen: false,
+    title: "",
+    message: "",
+    onConfirm: () => {},
+  });
 
   // Interaction states
   const [isLiked, setIsLiked] = useState<boolean>(initialPost.isLiked);
@@ -309,18 +324,25 @@ export function PostCard({
     }
   };
 
-  const handleDeletePost = async () => {
+  const handleDeletePost = () => {
     setMenuOpen(false);
-    const confirmed = window.confirm("Xóa bài viết này? Bài viết sẽ bị xóa khỏi tài khoản của bạn.");
-    if (!confirmed) return;
-
-    try {
-      await clientFetch(`/api/proxy/posts/${post.id}`, { method: "DELETE" });
-      onPostDeleted?.(post.id);
-      toast.success("Đã xóa bài viết");
-    } catch {
-      toast.error("Không thể xóa bài viết. Vui lòng thử lại.");
-    }
+    setConfirmDialog({
+      isOpen: true,
+      title: "Xóa bài viết này?",
+      message: "Bài viết này sẽ bị xóa vĩnh viễn khỏi tài khoản của bạn và không thể khôi phục lại.",
+      confirmText: "Xóa bài viết",
+      variant: "danger",
+      icon: "trash",
+      onConfirm: async () => {
+        try {
+          await clientFetch(`/api/proxy/posts/${post.id}`, { method: "DELETE" });
+          onPostDeleted?.(post.id);
+          toast.success("Đã xóa bài viết");
+        } catch {
+          toast.error("Không thể xóa bài viết. Vui lòng thử lại.");
+        }
+      },
+    });
   };
 
   const handleShare = async () => {
@@ -341,19 +363,26 @@ export function PostCard({
     }
   };
 
-  const handleBlockAuthor = async () => {
+  const handleBlockAuthor = () => {
     setMenuOpen(false);
-    const confirmed = window.confirm(`Chặn ${post.author.name}? Bạn sẽ không nhìn thấy bài viết của họ nữa.`);
-    if (!confirmed) return;
-
-    try {
-      await clientFetch(`/api/proxy/users/${post.author.id}/block`, { method: "PUT" });
-      onPostHidden?.(post.id);
-      const msg = `Đã chặn ${post.author.name}`;
-      toast.info(msg);
-    } catch {
-      toast.error("Không thể chặn người dùng này");
-    }
+    setConfirmDialog({
+      isOpen: true,
+      title: `Chặn ${post.author.name}?`,
+      message: `Bạn sẽ không nhìn thấy bài viết của ${post.author.name} nữa và họ cũng không thể tương tác với bạn.`,
+      confirmText: "Chặn người dùng",
+      variant: "danger",
+      icon: "danger",
+      onConfirm: async () => {
+        try {
+          await clientFetch(`/api/proxy/users/${post.author.id}/block`, { method: "PUT" });
+          onPostHidden?.(post.id);
+          const msg = `Đã chặn ${post.author.name}`;
+          toast.info(msg);
+        } catch {
+          toast.error("Không thể chặn người dùng này");
+        }
+      },
+    });
   };
 
   const openImageViewer = (index: number) => {
@@ -772,6 +801,18 @@ export function PostCard({
           }}
         />
       )}
+
+      {/* Confirmation Modal */}
+      <ConfirmModal
+        isOpen={confirmDialog.isOpen}
+        onClose={() => setConfirmDialog((prev) => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmDialog.onConfirm}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmText={confirmDialog.confirmText}
+        variant={confirmDialog.variant}
+        icon={confirmDialog.icon}
+      />
     </>
   );
 }

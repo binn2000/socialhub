@@ -46,5 +46,6 @@
     "A note cannot be empty.": "Ghi chú không được để trống.",
     "A note can have at most :max characters.": "Ghi chú tối đa :max ký tự.",
     "Music is not available right now.": "Hiện chưa dùng được nhạc, hãy thử lại sau.",
+    "Videos are not available right now.": "Hiện chưa tìm được video, hãy thử lại sau.",
     "This song was not found.": "Không tìm thấy bài hát này."
 }

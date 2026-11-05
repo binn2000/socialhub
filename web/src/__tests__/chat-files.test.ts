@@ -46,10 +46,11 @@ describe("pastedImageName", () => {
 import { quickReactionOf, QUICK_REACTIONS } from "@/lib/quick-reactions";
 
 describe("quickReactionOf", () => {
-  it("falls back to 👍 for anything not in the list", () => {
+  it("falls back to 👍 for anything empty and preserves any emoji", () => {
     expect(quickReactionOf("❤️")).toBe("❤️");
     expect(quickReactionOf(undefined)).toBe("👍");
-    expect(quickReactionOf("🦄")).toBe("👍");
+    expect(quickReactionOf("")).toBe("👍");
+    expect(quickReactionOf("🦄")).toBe("🦄");
     expect(QUICK_REACTIONS).toHaveLength(12);
   });
 });

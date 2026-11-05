@@ -20,6 +20,7 @@ import {
 import { useAuth } from "@/context/AuthContext";
 import { useBadges } from "@/context/BadgeContext";
 import { UserAvatar } from "@/components/ui/UserAvatar";
+import { ConfirmModal } from "@/components/ui/ConfirmModal";
 import { isDarkTheme, setDarkTheme } from "@/lib/theme";
 
 const iconButton =
@@ -45,6 +46,7 @@ export function Header() {
   const [search, setSearch] = useState("");
   const [isDark, setIsDark] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // The real theme is set by the inline script before hydration.
@@ -209,9 +211,9 @@ export function Header() {
                   role="menuitem"
                   onClick={() => {
                     setMenuOpen(false);
-                    logout();
+                    setShowLogoutConfirm(true);
                   }}
-                  className="w-full flex items-center gap-3 px-2.5 py-2 rounded-xl text-sm font-medium text-danger hover:bg-danger/10 transition"
+                  className="w-full flex items-center gap-3 px-2.5 py-2 rounded-xl text-sm font-medium text-danger hover:bg-danger/10 transition cursor-pointer"
                 >
                   <span className="w-8 h-8 rounded-full bg-danger/10 flex items-center justify-center">
                     <LogOut size={16} />
@@ -223,6 +225,17 @@ export function Header() {
           </div>
         )}
       </div>
+
+      <ConfirmModal
+        isOpen={showLogoutConfirm}
+        onClose={() => setShowLogoutConfirm(false)}
+        onConfirm={logout}
+        title="Đăng xuất khỏi tài khoản?"
+        message="Bạn có chắc chắn muốn đăng xuất không? Bạn sẽ cần đăng nhập lại để tiếp tục sử dụng SocialHub."
+        confirmText="Đăng xuất"
+        variant="warning"
+        icon="logout"
+      />
     </header>
   );
 }

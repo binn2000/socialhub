@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'package:dio/dio.dart';
+import 'package:flutter_learning/models/youtube_video.dart';
 import 'package:flutter_learning/models/comment.dart';
 import 'package:flutter_learning/models/message.dart';
 import 'package:flutter_learning/models/music_track.dart';
@@ -813,6 +814,26 @@ class HttpSocialApi extends SocialApi {
       'PUT',
       '/conversations/$conversationId/theme',
       data: {'theme': theme},
+    );
+  }
+
+  @override
+  Future<VideoPage> searchVideos(String query, {String? cursor}) async {
+    final response = await _request(
+      'GET',
+      '/videos/search',
+      query: {
+        if (query.trim().isNotEmpty) 'q': query.trim(),
+        'cursor': ?cursor,
+      },
+    );
+    return VideoPage(
+      videos: [
+        for (final item in _list(response))
+          if (YoutubeVideo.isValidId(item['id'] as String))
+            youtubeVideoFromJson(item),
+      ],
+      nextCursor: (response['meta'] as Json)['nextCursor'] as String?,
     );
   }
 

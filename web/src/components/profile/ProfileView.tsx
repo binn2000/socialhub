@@ -38,6 +38,7 @@ import { CreatePostCard } from "@/components/feed/CreatePostCard";
 import { ImageViewerModal } from "@/components/feed/ImageViewerModal";
 import { ReportModal } from "@/components/feed/ReportModal";
 import { FollowListModal } from "./FollowListModal";
+import { ConfirmModal } from "@/components/ui/ConfirmModal";
 import { CreateNoteModal } from "@/components/chat/CreateNoteModal";
 import { ViewNoteModal } from "@/components/chat/ViewNoteModal";
 import { useToast } from "@/context/ToastContext";
@@ -99,6 +100,20 @@ export function ProfileView({ userId }: ProfileViewProps) {
 
   // Action states
   const [actionBusy, setActionBusy] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string | React.ReactNode;
+    confirmText?: string;
+    variant?: "danger" | "warning";
+    icon?: "danger" | "warning" | "unfriend" | "unfollow";
+    onConfirm: () => Promise<void> | void;
+  }>({
+    isOpen: false,
+    title: "",
+    message: "",
+    onConfirm: () => {},
+  });
   const { toast } = useToast();
 
   const coverInputRef = useRef<HTMLInputElement>(null);
@@ -259,23 +274,30 @@ export function ProfileView({ userId }: ProfileViewProps) {
     }
   };
 
-  const handleUnfriend = async () => {
+  const handleUnfriend = () => {
     if (actionBusy || !targetId || !profile) return;
-    const confirmed = window.confirm(`Hủy kết bạn với ${profile.name}?`);
-    if (!confirmed) return;
-
-    setActionBusy(true);
-    try {
-      await clientFetch(`/api/proxy/friends/${targetId}`, {
-        method: "DELETE",
-      });
-      await loadProfile();
-      toast.info(`Đã hủy kết bạn với ${profile.name}`);
-    } catch (err) {
-      if (err instanceof ApiRequestError) toast.error(err.message);
-    } finally {
-      setActionBusy(false);
-    }
+    setConfirmDialog({
+      isOpen: true,
+      title: `Hủy kết bạn với ${profile.name}?`,
+      message: `Bạn và ${profile.name} sẽ không còn là bạn bè của nhau nữa. Bạn có chắc chắn muốn hủy kết bạn không?`,
+      confirmText: "Hủy kết bạn",
+      variant: "danger",
+      icon: "unfriend",
+      onConfirm: async () => {
+        setActionBusy(true);
+        try {
+          await clientFetch(`/api/proxy/friends/${targetId}`, {
+            method: "DELETE",
+          });
+          await loadProfile();
+          toast.info(`Đã hủy kết bạn với ${profile.name}`);
+        } catch (err) {
+          if (err instanceof ApiRequestError) toast.error(err.message);
+        } finally {
+          setActionBusy(false);
+        }
+      },
+    });
   };
 
   const handleToggleFollow = async () => {
@@ -283,48 +305,69 @@ export function ProfileView({ userId }: ProfileViewProps) {
     const userProf = profile as UserProfile;
     const nextIsFollowing = !userProf.isFollowing;
 
-    setActionBusy(true);
-    try {
-      await clientFetch(`/api/proxy/users/${targetId}/follow`, {
-        method: nextIsFollowing ? "PUT" : "DELETE",
-      });
-      setProfile((prev) =>
-        prev
-          ? {
-              ...prev,
-              isFollowing: nextIsFollowing,
-              followersCount: nextIsFollowing
-                ? (userProf.followersCount || 0) + 1
-                : Math.max(0, (userProf.followersCount || 1) - 1),
-            }
-          : null
-      );
-      if (nextIsFollowing) {
-        toast.success(`Đã theo dõi ${userProf.name}`);
-      } else {
-        toast.info(`Đã bỏ theo dõi ${userProf.name}`);
+    const executeFollowToggle = async () => {
+      setActionBusy(true);
+      try {
+        await clientFetch(`/api/proxy/users/${targetId}/follow`, {
+          method: nextIsFollowing ? "PUT" : "DELETE",
+        });
+        setProfile((prev) =>
+          prev
+            ? {
+                ...prev,
+                isFollowing: nextIsFollowing,
+                followersCount: nextIsFollowing
+                  ? (userProf.followersCount || 0) + 1
+                  : Math.max(0, (userProf.followersCount || 1) - 1),
+              }
+            : null
+        );
+        if (nextIsFollowing) {
+          toast.success(`Đã theo dõi ${userProf.name}`);
+        } else {
+          toast.info(`Đã bỏ theo dõi ${userProf.name}`);
+        }
+      } catch (err) {
+        if (err instanceof ApiRequestError) toast.error(err.message);
+      } finally {
+        setActionBusy(false);
       }
-    } catch (err) {
-      if (err instanceof ApiRequestError) toast.error(err.message);
-    } finally {
-      setActionBusy(false);
+    };
+
+    if (!nextIsFollowing) {
+      setConfirmDialog({
+        isOpen: true,
+        title: `Bỏ theo dõi ${userProf.name}?`,
+        message: `Bạn sẽ không còn nhìn thấy bài viết của ${userProf.name} trên bảng tin của mình nữa.`,
+        confirmText: "Bỏ theo dõi",
+        variant: "warning",
+        icon: "unfollow",
+        onConfirm: executeFollowToggle,
+      });
+    } else {
+      await executeFollowToggle();
     }
   };
 
-  const handleBlockUser = async () => {
+  const handleBlockUser = () => {
     if (!targetId || !profile || isMyProfile) return;
-    const confirmed = window.confirm(
-      `Chặn ${profile.name}? Hai bạn sẽ không thấy bài viết của nhau và không nhắn tin được.`
-    );
-    if (!confirmed) return;
-
-    try {
-      await clientFetch(`/api/proxy/users/${targetId}/block`, { method: "PUT" });
-      await loadProfile();
-      toast.info(`Đã chặn ${profile.name}`);
-    } catch (err) {
-      if (err instanceof ApiRequestError) toast.error(err.message);
-    }
+    setConfirmDialog({
+      isOpen: true,
+      title: `Chặn ${profile.name}?`,
+      message: `Hai bạn sẽ không thấy bài viết của nhau và không thể nhắn tin được nữa. Bạn có chắc chắn muốn chặn không?`,
+      confirmText: "Chặn người dùng",
+      variant: "danger",
+      icon: "danger",
+      onConfirm: async () => {
+        try {
+          await clientFetch(`/api/proxy/users/${targetId}/block`, { method: "PUT" });
+          await loadProfile();
+          toast.info(`Đã chặn ${profile.name}`);
+        } catch (err) {
+          if (err instanceof ApiRequestError) toast.error(err.message);
+        }
+      },
+    });
   };
 
   const handleUnblockUser = async () => {
@@ -1237,6 +1280,18 @@ export function ProfileView({ userId }: ProfileViewProps) {
           onClose={() => setImageViewerOpen(false)}
         />
       )}
+
+      {/* Confirmation Modal */}
+      <ConfirmModal
+        isOpen={confirmDialog.isOpen}
+        onClose={() => setConfirmDialog((prev) => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmDialog.onConfirm}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmText={confirmDialog.confirmText}
+        variant={confirmDialog.variant}
+        icon={confirmDialog.icon}
+      />
     </div>
   );
 }

@@ -128,6 +128,38 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ..showSnackBar(const SnackBar(content: Text('Đã sao chép liên kết')));
   }
 
+  Future<void> _confirmLogout(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        final colorScheme = Theme.of(dialogContext).colorScheme;
+        return AlertDialog(
+          title: const Text('Đăng xuất?'),
+          content: const Text(
+            'Bạn có chắc chắn muốn đăng xuất không? Bạn sẽ cần đăng nhập lại để tiếp tục sử dụng SocialHub.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Hủy'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              style: FilledButton.styleFrom(
+                backgroundColor: colorScheme.error,
+                foregroundColor: colorScheme.onError,
+              ),
+              child: const Text('Xác nhận đăng xuất'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed == true) {
+      widget.onLogout?.call();
+    }
+  }
+
   void _selectSection(ProfileSection section) {
     setState(() => _section = section);
     // Opening a tab shows what is already loaded and refreshes it.
@@ -500,7 +532,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 if (widget.onLogout != null) ...[
                                   const SizedBox(height: AppSpacing.xs),
                                   TextButton.icon(
-                                    onPressed: widget.onLogout,
+                                    onPressed: () => _confirmLogout(context),
                                     icon: const Icon(
                                       Icons.logout_rounded,
                                       size: 18,

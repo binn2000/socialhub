@@ -1,3 +1,4 @@
+import 'package:flutter_learning/models/youtube_video.dart';
 import 'package:flutter_learning/models/comment.dart';
 import 'package:flutter_learning/models/friend_request.dart';
 import 'package:flutter_learning/models/message.dart';
@@ -84,6 +85,14 @@ class MessagePoll {
     this.theme,
     this.quickReaction,
   });
+}
+
+/// One page of YouTube search results.
+class VideoPage {
+  final List<YoutubeVideo> videos;
+  final String? nextCursor;
+
+  const VideoPage({this.videos = const [], this.nextCursor});
 }
 
 /// One page of the pictures or files shared in a conversation.
@@ -368,6 +377,12 @@ abstract class SocialApi {
     String conversationId,
     String theme,
   ) async {}
+
+  /// Searches YouTube through the server (server only); an empty [query] lists
+  /// the popular videos. Throws [ApiException] (`video_unavailable`) when
+  /// YouTube cannot be used right now.
+  Future<VideoPage> searchVideos(String query, {String? cursor}) async =>
+      const VideoPage();
 
   /// Chooses the emoji of the quick send button for both people (server only).
   Future<void> setQuickReaction(String conversationId, String emoji) async {}

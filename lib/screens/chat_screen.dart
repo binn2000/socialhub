@@ -101,6 +101,38 @@ class _ChatScreenState extends State<ChatScreen> {
   int _pickerTab = 0; // 0: Emojis, 1: Stickers
   String _selectedEmojiCategoryId = 'smileys';
   String _selectedStickerPackId = 'pack_animated_3d';
+  // Created when a tab body opens (so the page matches the selected chip) and
+  // dropped when it closes: a PageController reattached later would restart at
+  // its first page.
+  PageController? _emojiPages;
+  PageController? _stickerPages;
+  final ScrollController _emojiTabRow = ScrollController();
+  final ScrollController _stickerTabRow = ScrollController();
+
+  void _disposePickerPages() {
+    _emojiPages?.dispose();
+    _stickerPages?.dispose();
+    _emojiPages = null;
+    _stickerPages = null;
+  }
+
+  /// Slides the grid and keeps the chip row showing the selected chip.
+  void _selectPickerPage(PageController? pages, ScrollController row, int i) {
+    if (pages != null && pages.hasClients) {
+      pages.animateToPage(
+        i,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeInOut,
+      );
+    }
+    if (row.hasClients) {
+      row.animateTo(
+        (i * 100.0 - 60).clamp(0.0, row.position.maxScrollExtent),
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOut,
+      );
+    }
+  }
 
   // Reply / Quote state
   QuotedMessage? _replyingTo;
@@ -144,6 +176,9 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollController.dispose();
     _messageController.dispose();
     _searchController.dispose();
+    _disposePickerPages();
+    _emojiTabRow.dispose();
+    _stickerTabRow.dispose();
     super.dispose();
   }
 
@@ -544,8 +579,28 @@ class _ChatScreenState extends State<ChatScreen> {
                       color: Colors.amber,
                     ),
                     title: const Text('Thu hồi tin nhắn'),
-                    onTap: () {
+                    onTap: () async {
                       Navigator.pop(sheetContext);
+                      final confirmed = await showDialog<bool>(
+                        context: context,
+                        builder: (dialogCtx) => AlertDialog(
+                          title: const Text('Thu hồi tin nhắn?'),
+                          content: const Text(
+                            'Tin nhắn này sẽ bị thu hồi đối với tất cả thành viên trong cuộc trò chuyện.',
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(dialogCtx, false),
+                              child: const Text('Hủy'),
+                            ),
+                            FilledButton(
+                              onPressed: () => Navigator.pop(dialogCtx, true),
+                              child: const Text('Thu hồi'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirmed != true) return;
                       final onRecall = widget.onRecallMessage;
                       if (onRecall != null) {
                         onRecall(message.id);
@@ -554,6 +609,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           _unsentMessageIds.add(message.id);
                         });
                       }
+                      if (!mounted || !context.mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
                           content: Text('Đã thu hồi tin nhắn'),
@@ -571,8 +627,36 @@ class _ChatScreenState extends State<ChatScreen> {
                     'Xóa ở phía tôi',
                     style: TextStyle(color: Colors.red),
                   ),
-                  onTap: () {
+                  onTap: () async {
                     Navigator.pop(sheetContext);
+                    final confirmed = await showDialog<bool>(
+                      context: context,
+                      builder: (dialogCtx) => AlertDialog(
+                        title: const Text('Xóa tin nhắn ở phía bạn?'),
+                        content: const Text(
+                          'Tin nhắn này sẽ bị xóa khỏi thiết bị của bạn nhưng vẫn hiển thị với những người khác trong đoạn chat.',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(dialogCtx, false),
+                            child: const Text('Hủy'),
+                          ),
+                          FilledButton(
+                            onPressed: () => Navigator.pop(dialogCtx, true),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: Theme.of(
+                                context,
+                              ).colorScheme.error,
+                              foregroundColor: Theme.of(
+                                context,
+                              ).colorScheme.onError,
+                            ),
+                            child: const Text('Xóa'),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (confirmed != true) return;
                     final onHide = widget.onHideMessage;
                     if (onHide != null) {
                       onHide(message.id);
@@ -581,6 +665,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         _deletedMessageIds.add(message.id);
                       });
                     }
+                    if (!mounted || !context.mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
                         content: Text('Đã xóa tin nhắn ở phía bạn'),
@@ -1795,8 +1880,10 @@ class _ChatScreenState extends State<ChatScreen> {
                     children: [
                       IconButton(
                         tooltip: 'Chèn biểu tượng cảm xúc & nhãn dán',
-                        onPressed: () =>
-                            setState(() => _showPicker = !_showPicker),
+                        onPressed: () => setState(() {
+                          _disposePickerPages();
+                          _showPicker = !_showPicker;
+                        }),
                         icon: Icon(
                           _showPicker
                               ? Icons.keyboard_alt_outlined
@@ -1905,16 +1992,6 @@ class _ChatScreenState extends State<ChatScreen> {
     final colorScheme = Theme.of(context).colorScheme;
     final palette = AppPalette.of(context);
 
-    final currentEmojiCat = kEmojiCategories.firstWhere(
-      (c) => c.id == _selectedEmojiCategoryId,
-      orElse: () => kEmojiCategories.first,
-    );
-
-    final currentStickerPack = kStickerPacks.firstWhere(
-      (p) => p.id == _selectedStickerPackId,
-      orElse: () => kStickerPacks.first,
-    );
-
     return Container(
       height: 290,
       decoration: BoxDecoration(
@@ -1939,7 +2016,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   child: Row(
                     children: [
                       GestureDetector(
-                        onTap: () => setState(() => _pickerTab = 0),
+                        onTap: () => setState(() {
+                          _disposePickerPages();
+                          _pickerTab = 0;
+                        }),
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 150),
                           padding: const EdgeInsets.symmetric(
@@ -1984,7 +2064,10 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                       ),
                       GestureDetector(
-                        onTap: () => setState(() => _pickerTab = 1),
+                        onTap: () => setState(() {
+                          _disposePickerPages();
+                          _pickerTab = 1;
+                        }),
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 150),
                           padding: const EdgeInsets.symmetric(
@@ -2035,7 +2118,10 @@ class _ChatScreenState extends State<ChatScreen> {
                 IconButton(
                   icon: const Icon(Icons.close_rounded, size: 20),
                   tooltip: 'Đóng',
-                  onPressed: () => setState(() => _showPicker = false),
+                  onPressed: () => setState(() {
+                    _disposePickerPages();
+                    _showPicker = false;
+                  }),
                 ),
               ],
             ),
@@ -2051,6 +2137,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       SizedBox(
                         height: 38,
                         child: ListView.separated(
+                          controller: _emojiTabRow,
                           scrollDirection: Axis.horizontal,
                           padding: const EdgeInsets.symmetric(
                             horizontal: 12,
@@ -2063,9 +2150,16 @@ class _ChatScreenState extends State<ChatScreen> {
                             final isSelected =
                                 cat.id == _selectedEmojiCategoryId;
                             return GestureDetector(
-                              onTap: () => setState(
-                                () => _selectedEmojiCategoryId = cat.id,
-                              ),
+                              onTap: () {
+                                setState(
+                                  () => _selectedEmojiCategoryId = cat.id,
+                                );
+                                _selectPickerPage(
+                                  _emojiPages,
+                                  _emojiTabRow,
+                                  idx,
+                                );
+                              },
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 10,
@@ -2107,28 +2201,46 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                       ),
                       const Divider(height: 1, thickness: 0.5),
-                      // Emojis Grid
+                      // Emojis: swipe sideways to the next category
                       Expanded(
-                        child: GridView.builder(
-                          padding: const EdgeInsets.all(10),
-                          gridDelegate:
-                              const SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: 7,
-                                mainAxisSpacing: 8,
-                                crossAxisSpacing: 8,
-                              ),
-                          itemCount: currentEmojiCat.emojis.length,
-                          itemBuilder: (context, idx) {
-                            final emoji = currentEmojiCat.emojis[idx];
-                            return InkWell(
-                              onTap: () => _insertEmoji(emoji),
-                              borderRadius: BorderRadius.circular(10),
-                              child: Center(
-                                child: Text(
-                                  emoji,
-                                  style: const TextStyle(fontSize: 24),
-                                ),
-                              ),
+                        child: PageView.builder(
+                          controller: _emojiPages ??= PageController(
+                            initialPage: kEmojiCategories.indexWhere(
+                              (c) => c.id == _selectedEmojiCategoryId,
+                            ),
+                          ),
+                          itemCount: kEmojiCategories.length,
+                          onPageChanged: (i) {
+                            setState(
+                              () => _selectedEmojiCategoryId =
+                                  kEmojiCategories[i].id,
+                            );
+                            _selectPickerPage(null, _emojiTabRow, i);
+                          },
+                          itemBuilder: (context, page) {
+                            final emojis = kEmojiCategories[page].emojis;
+                            return GridView.builder(
+                              padding: const EdgeInsets.all(10),
+                              gridDelegate:
+                                  const SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: 7,
+                                    mainAxisSpacing: 8,
+                                    crossAxisSpacing: 8,
+                                  ),
+                              itemCount: emojis.length,
+                              itemBuilder: (context, idx) {
+                                final emoji = emojis[idx];
+                                return InkWell(
+                                  onTap: () => _insertEmoji(emoji),
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: Center(
+                                    child: Text(
+                                      emoji,
+                                      style: const TextStyle(fontSize: 24),
+                                    ),
+                                  ),
+                                );
+                              },
                             );
                           },
                         ),
@@ -2141,6 +2253,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       SizedBox(
                         height: 42,
                         child: ListView.separated(
+                          controller: _stickerTabRow,
                           scrollDirection: Axis.horizontal,
                           padding: const EdgeInsets.symmetric(
                             horizontal: 12,
@@ -2153,9 +2266,16 @@ class _ChatScreenState extends State<ChatScreen> {
                             final isSelected =
                                 pack.id == _selectedStickerPackId;
                             return GestureDetector(
-                              onTap: () => setState(
-                                () => _selectedStickerPackId = pack.id,
-                              ),
+                              onTap: () {
+                                setState(
+                                  () => _selectedStickerPackId = pack.id,
+                                );
+                                _selectPickerPage(
+                                  _stickerPages,
+                                  _stickerTabRow,
+                                  idx,
+                                );
+                              },
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 12,
@@ -2204,48 +2324,67 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                       ),
                       const Divider(height: 1, thickness: 0.5),
-                      // Stickers Grid
+                      // Stickers: swipe sideways to the next pack
                       Expanded(
-                        child: GridView.builder(
-                          padding: const EdgeInsets.all(12),
-                          gridDelegate:
-                              const SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: 4,
-                                mainAxisSpacing: 12,
-                                crossAxisSpacing: 12,
-                                childAspectRatio: 0.85,
-                              ),
-                          itemCount: currentStickerPack.stickers.length,
-                          itemBuilder: (context, idx) {
-                            final stk = currentStickerPack.stickers[idx];
-                            return InkWell(
-                              onTap: () => _sendSticker(stk),
-                              borderRadius: BorderRadius.circular(12),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Expanded(
-                                    child: Image.network(
-                                      stk.url,
-                                      fit: BoxFit.contain,
-                                      errorBuilder: (_, _, _) => const Icon(
-                                        Icons.sentiment_satisfied_alt_rounded,
-                                        size: 32,
+                        child: PageView.builder(
+                          controller: _stickerPages ??= PageController(
+                            initialPage: kStickerPacks.indexWhere(
+                              (p) => p.id == _selectedStickerPackId,
+                            ),
+                          ),
+                          itemCount: kStickerPacks.length,
+                          onPageChanged: (i) {
+                            setState(
+                              () =>
+                                  _selectedStickerPackId = kStickerPacks[i].id,
+                            );
+                            _selectPickerPage(null, _stickerTabRow, i);
+                          },
+                          itemBuilder: (context, page) {
+                            final stickers = kStickerPacks[page].stickers;
+                            return GridView.builder(
+                              padding: const EdgeInsets.all(12),
+                              gridDelegate:
+                                  const SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: 4,
+                                    mainAxisSpacing: 12,
+                                    crossAxisSpacing: 12,
+                                    childAspectRatio: 0.85,
+                                  ),
+                              itemCount: stickers.length,
+                              itemBuilder: (context, idx) {
+                                final stk = stickers[idx];
+                                return InkWell(
+                                  onTap: () => _sendSticker(stk),
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Expanded(
+                                        child: Image.network(
+                                          stk.url,
+                                          fit: BoxFit.contain,
+                                          errorBuilder: (_, _, _) => const Icon(
+                                            Icons
+                                                .sentiment_satisfied_alt_rounded,
+                                            size: 32,
+                                          ),
+                                        ),
                                       ),
-                                    ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        stk.name,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          color: colorScheme.onSurfaceVariant,
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    stk.name,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      color: colorScheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                                ],
-                              ),
+                                );
+                              },
                             );
                           },
                         ),

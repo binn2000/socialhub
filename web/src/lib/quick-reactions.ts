@@ -1,9 +1,11 @@
-/** The emojis the quick send button can send (ConversationController::QUICK_REACTIONS). */
+/** The emojis the quick send button can send as default presets. */
 export const QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "😡", "🔥", "🎉", "👏", "😍", "🙏", "💯"] as const;
 
 export const DEFAULT_QUICK_REACTION = "👍";
 
-/** What the server sent, or the default when it is missing or not in the list. */
+/** What the server sent, or the default when it is missing or empty. */
 export function quickReactionOf(value: string | null | undefined): string {
-  return value && (QUICK_REACTIONS as readonly string[]).includes(value) ? value : DEFAULT_QUICK_REACTION;
+  if (!value || typeof value !== "string") return DEFAULT_QUICK_REACTION;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : DEFAULT_QUICK_REACTION;
 }

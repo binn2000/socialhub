@@ -41,7 +41,10 @@ class ConversationThemeAndMediaTest extends TestCase
         $this->postJson("/api/v1/conversations/$c/messages", ['text' => 'Chào'])->assertCreated();
 
         $this->getJson('/api/v1/conversations')->assertJsonPath('data.0.quickReaction', '👍');
-        $this->putJson("/api/v1/conversations/$c/quick-reaction", ['emoji' => '🦄'])->assertUnprocessable();
+        $this->putJson("/api/v1/conversations/$c/quick-reaction", ['emoji' => ''])->assertUnprocessable();
+        $this->putJson("/api/v1/conversations/$c/quick-reaction", ['emoji' => 'abc'])->assertUnprocessable();
+        $this->putJson("/api/v1/conversations/$c/quick-reaction", ['emoji' => '<b>'])->assertUnprocessable();
+        $this->putJson("/api/v1/conversations/$c/quick-reaction", ['emoji' => '🦄'])->assertOk()->assertJsonPath('data.quickReaction', '🦄');
         // Without the variation selector it is still the same heart.
         $this->putJson("/api/v1/conversations/$c/quick-reaction", ['emoji' => "\u{2764}"])
             ->assertOk()->assertJsonPath('data.quickReaction', '❤️');

@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import Link from "next/navigation";
 import { usePathname } from "next/navigation";
 import NextLink from "next/link";
@@ -19,6 +19,7 @@ import {
 import { useAuth } from "@/context/AuthContext";
 import { useBadges } from "@/context/BadgeContext";
 import { UserAvatar } from "@/components/ui/UserAvatar";
+import { ConfirmModal } from "@/components/ui/ConfirmModal";
 
 import type { LucideIcon } from "lucide-react";
 
@@ -33,6 +34,7 @@ export function Sidebar() {
   const pathname = usePathname();
   const { user, logout } = useAuth();
   const { unreadNotifications, unreadMessages } = useBadges();
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
   const navItems: NavItem[] = [
     { label: "Trang chủ", href: "/", icon: Home },
@@ -136,9 +138,10 @@ export function Sidebar() {
                 <Settings size={18} />
               </NextLink>
               <button
-                onClick={() => logout()}
+                type="button"
+                onClick={() => setShowLogoutConfirm(true)}
                 title="Đăng xuất"
-                className="p-2 text-appText-secondary hover:text-danger dark:hover:text-danger rounded-lg transition-colors"
+                className="p-2 text-appText-secondary hover:text-danger dark:hover:text-danger rounded-lg transition-colors cursor-pointer"
               >
                 <LogOut size={18} />
               </button>
@@ -146,6 +149,17 @@ export function Sidebar() {
           </div>
         </div>
       )}
+
+      <ConfirmModal
+        isOpen={showLogoutConfirm}
+        onClose={() => setShowLogoutConfirm(false)}
+        onConfirm={logout}
+        title="Đăng xuất khỏi tài khoản?"
+        message="Bạn có chắc chắn muốn đăng xuất không? Bạn sẽ cần đăng nhập lại để tiếp tục sử dụng SocialHub."
+        confirmText="Đăng xuất"
+        variant="warning"
+        icon="logout"
+      />
     </aside>
   );
 }

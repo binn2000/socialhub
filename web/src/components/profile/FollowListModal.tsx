@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { X, UserCheck, UserPlus, Users, RotateCw } from "lucide-react";
 import { UserAvatar } from "@/components/ui/UserAvatar";
+import { ConfirmModal } from "@/components/ui/ConfirmModal";
 import { clientFetch } from "@/lib/client-api";
 import { ApiRequestError } from "@/lib/errors";
 import { useAuth } from "@/context/AuthContext";
@@ -29,6 +30,7 @@ export function FollowListModal({
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [togglingIds, setTogglingIds] = useState<Set<string>>(new Set());
+  const [unfollowTarget, setUnfollowTarget] = useState<UserListItem | null>(null);
 
   const title = type === "followers" ? "Người theo dõi" : "Đang theo dõi";
 
@@ -77,11 +79,10 @@ export function FollowListModal({
 
   if (!isOpen) return null;
 
-  const handleToggleFollow = async (targetUser: UserListItem) => {
+  const executeToggleFollow = async (targetUser: UserListItem, nextIsFollowing: boolean) => {
     if (togglingIds.has(targetUser.id)) return;
 
     setTogglingIds((prev) => new Set(prev).add(targetUser.id));
-    const nextIsFollowing = !targetUser.isFollowing;
 
     // Optimistic update
     setUsers((prev) =>
@@ -107,6 +108,14 @@ export function FollowListModal({
         next.delete(targetUser.id);
         return next;
       });
+    }
+  };
+
+  const handleToggleFollow = (targetUser: UserListItem) => {
+    if (targetUser.isFollowing) {
+      setUnfollowTarget(targetUser);
+    } else {
+      executeToggleFollow(targetUser, true);
     }
   };
 
@@ -228,6 +237,22 @@ export function FollowListModal({
           )}
         </div>
       </div>
+
+      {/* Unfollow Confirm Modal */}
+      <ConfirmModal
+        isOpen={Boolean(unfollowTarget)}
+        onClose={() => setUnfollowTarget(null)}
+        onConfirm={() => {
+          if (unfollowTarget) {
+            executeToggleFollow(unfollowTarget, false);
+          }
+        }}
+        title={`Bỏ theo dõi ${unfollowTarget?.name}?`}
+        message={`Bạn sẽ không còn nhìn thấy bài viết của ${unfollowTarget?.name} trên bảng tin của mình nữa.`}
+        confirmText="Bỏ theo dõi"
+        variant="warning"
+        icon="unfollow"
+      />
     </div>
   );
 }

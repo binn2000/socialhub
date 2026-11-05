@@ -1,3 +1,4 @@
+import 'package:flutter_learning/models/youtube_video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_learning/data/post_reactions.dart';
 import 'package:flutter_learning/models/comment.dart';
@@ -217,6 +218,14 @@ Story storyFromJson(Json json, {String Function(String)? absoluteUrl}) {
     privacy: privacyLabel(json['privacy'] as String?),
   );
 }
+
+YoutubeVideo youtubeVideoFromJson(Json json) => YoutubeVideo(
+  id: json['id'] as String,
+  title: json['title'] as String,
+  channelTitle: json['channelTitle'] as String,
+  thumbnailUrl: json['thumbnailUrl'] as String?,
+  durationSeconds: json['durationSeconds'] as int?,
+);
 
 ChatAttachment attachmentFromJson(
   Json json, {

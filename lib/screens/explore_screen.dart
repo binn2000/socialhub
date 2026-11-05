@@ -1,4 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_learning/models/youtube_video.dart';
+import 'package:flutter_learning/screens/youtube_player_screen.dart';
+import 'package:flutter_learning/services/social_api.dart' show VideoPage;
+import 'package:flutter_learning/widgets/youtube_videos_view.dart';
 import 'package:flutter_learning/widgets/load_more_listener.dart';
 import 'package:flutter_learning/models/post.dart';
 import 'package:flutter_learning/models/post_interactions.dart';
@@ -47,6 +51,14 @@ class ExploreScreen extends StatefulWidget {
   final Set<String> savedPostIds;
   final ValueChanged<String>? onToggleSave;
 
+  /// Server only: searches YouTube (empty query = popular videos). When set,
+  /// Explore gets a "Video" tab next to "Bài viết".
+  final Future<VideoPage> Function(String query, String? cursor)? searchVideos;
+
+  /// Plays a video; the default opens [YoutubePlayerScreen]. Tests replace it
+  /// because the embedded player needs a real web view.
+  final ValueChanged<YoutubeVideo>? onPlayVideo;
+
   const ExploreScreen({
     super.key,
     required this.posts,
@@ -57,6 +69,8 @@ class ExploreScreen extends StatefulWidget {
     this.onOpenMessages,
     this.savedPostIds = const {},
     this.onToggleSave,
+    this.searchVideos,
+    this.onPlayVideo,
   });
 
   @override
@@ -82,6 +96,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
   bool _isSearching = false;
   String _searchQuery = '';
   ExploreFilter _selectedFilter = ExploreFilter.forYou;
+  bool _showVideos = false;
 
   @override
   void dispose() {
@@ -206,8 +221,60 @@ class _ExploreScreenState extends State<ExploreScreen> {
     );
   }
 
+  void _playVideo(YoutubeVideo video) {
+    if (widget.onPlayVideo != null) {
+      widget.onPlayVideo!(video);
+      return;
+    }
+    Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => YoutubePlayerScreen(video: video),
+      ),
+    );
+  }
+
+  /// "Bài viết" | "Video", only when the server can search videos.
+  Widget _modeSwitch() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      child: SegmentedButton<bool>(
+        showSelectedIcon: false,
+        segments: const [
+          ButtonSegment(value: false, label: Text('Bài viết')),
+          ButtonSegment(value: true, label: Text('Video')),
+        ],
+        selected: {_showVideos},
+        onSelectionChanged: (value) =>
+            setState(() => _showVideos = value.first),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (_showVideos && widget.searchVideos != null) {
+      return Scaffold(
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+        appBar: AppBar(
+          title: const Text(
+            'Khám phá',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
+        ),
+        body: Column(
+          children: [
+            _modeSwitch(),
+            Expanded(
+              child: YoutubeVideosView(
+                search: widget.searchVideos!,
+                onPlay: _playVideo,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     final visiblePosts = _visiblePosts;
 
     return Scaffold(
@@ -243,6 +310,8 @@ class _ExploreScreenState extends State<ExploreScreen> {
               ? null
               : const AlwaysScrollableScrollPhysics(),
           slivers: [
+            if (widget.searchVideos != null)
+              SliverToBoxAdapter(child: _modeSwitch()),
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),

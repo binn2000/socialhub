@@ -17,6 +17,7 @@ use App\Http\Controllers\Api\PostInteractionController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\StoryController;
 use App\Http\Controllers\Api\UserController;
+use App\Http\Controllers\Api\VideoSearchController;
 use App\Http\Middleware\TouchLastSeen;
 use Illuminate\Support\Facades\Route;
 
@@ -40,6 +41,7 @@ Route::prefix('v1')->group(function () {
         Route::put('me/note', [NoteController::class, 'store'])->middleware('throttle:notes');
         Route::delete('me/note', [NoteController::class, 'destroy']);
         Route::get('notes', [NoteController::class, 'index']);
+        Route::get('videos/search', [VideoSearchController::class, 'search'])->middleware('throttle:video-search');
         Route::get('music/search', [MusicController::class, 'search'])->middleware('throttle:music');
         Route::post('me/presence', [MeController::class, 'presence']);
         Route::post('me/cover', [MeController::class, 'setCover'])->middleware('throttle:uploads');

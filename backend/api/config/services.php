@@ -40,6 +40,12 @@ return [
         'country' => env('MUSIC_COUNTRY', 'VN'),
     ],
 
+    // The "Video" tab searches YouTube (Data API v3 key from Google Cloud Console; free daily quota).
+    'youtube' => [
+        'key' => env('YOUTUBE_API_KEY'),
+        'region' => env('YOUTUBE_REGION', 'VN'),
+    ],
+
     // Video uploads are checked with ffprobe and converted with ffmpeg (both must be installed).
     'ffmpeg' => [
         'binary' => env('FFMPEG_BINARY', 'ffmpeg'),

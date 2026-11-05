@@ -20,6 +20,7 @@ import type { LucideIcon } from "lucide-react";
 import { PostCard } from "@/components/feed/PostCard";
 import { UserAvatar } from "@/components/ui/UserAvatar";
 import { RightSidebar } from "@/components/layout/RightSidebar";
+import { YoutubeVideos } from "@/components/explore/YoutubeVideos";
 import { clientFetch } from "@/lib/client-api";
 import type { Post, CursorMeta, UserListItem } from "@/types";
 
@@ -40,6 +41,7 @@ function ExploreContent() {
   const [query, setQuery] = useState(initialQ);
   const [activeFilter, setActiveFilter] = useState<ExploreFilter>("for_you");
   const [activeTab, setActiveTab] = useState<SearchTab>("posts");
+  const [mode, setMode] = useState<"explore" | "youtube">("explore");
 
   // Posts state
   const [posts, setPosts] = useState<Post[]>([]);
@@ -184,6 +186,37 @@ function ExploreContent() {
         </p>
       </div>
 
+      {/* Switch between the post explorer and the YouTube video search */}
+      <div className="flex items-center gap-1 p-1 mb-5 rounded-2xl bg-surface-muted dark:bg-surface-dark-muted w-fit" role="tablist">
+        {([
+          { id: "explore", label: "Bài viết & mọi người", icon: Compass },
+          { id: "youtube", label: "Video", icon: Video },
+        ] as const).map((m) => {
+          const Icon = m.icon;
+          return (
+            <button
+              key={m.id}
+              type="button"
+              role="tab"
+              aria-selected={mode === m.id}
+              onClick={() => setMode(m.id)}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition ${
+                mode === m.id
+                  ? "bg-white dark:bg-surface-dark text-brand shadow-sm"
+                  : "text-appText-secondary hover:text-appText-primary dark:hover:text-white"
+              }`}
+            >
+              <Icon size={14} />
+              <span>{m.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {mode === "youtube" && <YoutubeVideos />}
+
+      {mode === "explore" && (
+        <>
       {/* Search Input Box */}
       <div className="relative mb-5">
         <Search
@@ -372,6 +405,8 @@ function ExploreContent() {
             </div>
           )}
         </div>
+      )}
+        </>
       )}
       </div>
 

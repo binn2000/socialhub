@@ -18,6 +18,7 @@ import {
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { UserAvatar } from "@/components/ui/UserAvatar";
+import { ConfirmModal } from "@/components/ui/ConfirmModal";
 import { timeAgo } from "@/lib/time-ago";
 import { clientFetch } from "@/lib/client-api";
 import { ApiRequestError } from "@/lib/errors";
@@ -31,6 +32,7 @@ export default function FriendsPage() {
   const [category, setCategory] = useState<FriendsCategory>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [unfriendTarget, setUnfriendTarget] = useState<UserListItem | null>(null);
 
   // Data states
   const [requests, setRequests] = useState<FriendRequest[]>([]);
@@ -233,10 +235,9 @@ export default function FriendsPage() {
     }
   };
 
-  const handleUnfriend = async (friend: UserListItem) => {
-    if (actionBusy) return;
-    const confirmed = window.confirm(`Hủy kết bạn với ${friend.name}?`);
-    if (!confirmed) return;
+  const confirmExecuteUnfriend = async () => {
+    if (actionBusy || !unfriendTarget) return;
+    const friend = unfriendTarget;
 
     setActionBusy(true);
     try {
@@ -614,8 +615,8 @@ export default function FriendsPage() {
 
                           <button
                             type="button"
-                            onClick={() => handleUnfriend(friend)}
-                            className="p-2 rounded-lg text-appText-secondary hover:text-red-600 hover:bg-surface-muted dark:hover:bg-surface-dark-muted transition"
+                            onClick={() => setUnfriendTarget(friend)}
+                            className="p-2 rounded-lg text-appText-secondary hover:text-red-600 hover:bg-surface-muted dark:hover:bg-surface-dark-muted transition cursor-pointer"
                             title="Hủy kết bạn"
                           >
                             <X className="w-4 h-4" />
@@ -643,6 +644,18 @@ export default function FriendsPage() {
           )}
         </div>
       )}
+
+      {/* Unfriend Confirm Modal */}
+      <ConfirmModal
+        isOpen={Boolean(unfriendTarget)}
+        onClose={() => setUnfriendTarget(null)}
+        onConfirm={confirmExecuteUnfriend}
+        title={`Hủy kết bạn với ${unfriendTarget?.name}?`}
+        message={`Bạn và ${unfriendTarget?.name} sẽ không còn là bạn bè của nhau nữa.`}
+        confirmText="Hủy kết bạn"
+        variant="danger"
+        icon="unfriend"
+      />
     </div>
   );
 }

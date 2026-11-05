@@ -28,6 +28,7 @@ import {
   Info,
   ThumbsUp,
   UploadCloud,
+  Plus,
 } from "lucide-react";
 import { UserAvatar } from "@/components/ui/UserAvatar";
 import { timeAgo } from "@/lib/time-ago";
@@ -51,6 +52,8 @@ import { lastSeenOfMine, sendState } from "@/lib/message-status";
 import { findMatchingMessageIds } from "@/lib/chat-search";
 import { ForwardMessageModal } from "./ForwardMessageModal";
 import { SharedMediaDrawer } from "./SharedMediaDrawer";
+import { ConfirmModal } from "@/components/ui/ConfirmModal";
+import { QuickReactionPickerModal } from "./QuickReactionPickerModal";
 import { getChatTheme } from "@/lib/chat-theme";
 import { QUICK_REACTIONS, DEFAULT_QUICK_REACTION, quickReactionOf } from "@/lib/quick-reactions";
 import {
@@ -114,6 +117,24 @@ export function ChatPane({
     x: number;
     y: number;
   } | null>(null);
+  const [confirmMessageAction, setConfirmMessageAction] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmText: string;
+    variant: "danger" | "warning";
+    icon: "warning" | "trash";
+    onConfirm: () => Promise<void> | void;
+  }>({
+    isOpen: false,
+    title: "",
+    message: "",
+    confirmText: "Xác nhận",
+    variant: "warning",
+    icon: "warning",
+    onConfirm: () => {},
+  });
+  const [showAllEmojisModal, setShowAllEmojisModal] = useState(false);
 
   // Search state
   const [showSearch, setShowSearch] = useState(false);
@@ -1552,6 +1573,18 @@ export function ChatPane({
                     {emoji}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowQuickPicker(false);
+                    setShowAllEmojisModal(true);
+                  }}
+                  className="col-span-6 mt-1.5 py-1.5 px-2 text-xs font-semibold text-brand hover:bg-brand/10 rounded-xl transition flex items-center justify-center gap-1.5 border border-dashed border-brand/30 cursor-pointer"
+                  title="Chọn từ tất cả biểu tượng cảm xúc"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Chọn biểu tượng khác...</span>
+                </button>
               </div>
             )}
           </span>
@@ -1638,8 +1671,17 @@ export function ChatPane({
             <button
               type="button"
               onClick={() => {
-                handleUnsendMessage(contextMenu.msg.id);
+                const msgId = contextMenu.msg.id;
                 setContextMenu(null);
+                setConfirmMessageAction({
+                  isOpen: true,
+                  title: "Thu hồi tin nhắn?",
+                  message: "Tin nhắn này sẽ bị thu hồi đối với tất cả thành viên trong cuộc trò chuyện.",
+                  confirmText: "Thu hồi",
+                  variant: "warning",
+                  icon: "warning",
+                  onConfirm: () => handleUnsendMessage(msgId),
+                });
               }}
               className="w-full px-3 py-2 text-left flex items-center gap-2 text-amber-600 dark:text-amber-500 hover:bg-surface-muted dark:hover:bg-surface-dark-muted transition cursor-pointer"
             >
@@ -1651,8 +1693,17 @@ export function ChatPane({
           <button
             type="button"
             onClick={() => {
-              handleDeleteMessage(contextMenu.msg.id);
+              const msgId = contextMenu.msg.id;
               setContextMenu(null);
+              setConfirmMessageAction({
+                isOpen: true,
+                title: "Xóa tin nhắn ở phía bạn?",
+                message: "Tin nhắn này sẽ bị xóa khỏi thiết bị của bạn nhưng vẫn hiển thị với những người khác trong đoạn chat.",
+                confirmText: "Xóa ở phía tôi",
+                variant: "danger",
+                icon: "trash",
+                onConfirm: () => handleDeleteMessage(msgId),
+              });
             }}
             className="w-full px-3 py-2 text-left flex items-center gap-2 text-red-600 dark:text-red-500 hover:bg-surface-muted dark:hover:bg-surface-dark-muted transition cursor-pointer"
           >
@@ -1689,6 +1740,29 @@ export function ChatPane({
           setShowMediaDrawer(false);
           scrollToMessage(msgId);
         }}
+      />
+
+      {/* Message Action Confirmation Modal */}
+      <ConfirmModal
+        isOpen={confirmMessageAction.isOpen}
+        onClose={() => setConfirmMessageAction((prev) => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmMessageAction.onConfirm}
+        title={confirmMessageAction.title}
+        message={confirmMessageAction.message}
+        confirmText={confirmMessageAction.confirmText}
+        variant={confirmMessageAction.variant}
+        icon={confirmMessageAction.icon}
+      />
+
+      {/* Full Quick Reaction Emoji Picker Modal */}
+      <QuickReactionPickerModal
+        isOpen={showAllEmojisModal}
+        currentEmoji={quickReaction}
+        onSelectEmoji={(emoji) => {
+          handleSelectQuickReaction(emoji);
+          setShowAllEmojisModal(false);
+        }}
+        onClose={() => setShowAllEmojisModal(false)}
       />
     </div>
   );

@@ -26,6 +26,7 @@ import { useAuth } from "@/context/AuthContext";
 import { clientFetch } from "@/lib/client-api";
 import { UserAvatar } from "@/components/ui/UserAvatar";
 import { DeleteAccountModal } from "@/components/settings/DeleteAccountModal";
+import { ConfirmModal } from "@/components/ui/ConfirmModal";
 import { ApiRequestError } from "@/lib/errors";
 import type { Me } from "@/types";
 
@@ -55,6 +56,19 @@ export default function EditProfilePage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmText: string;
+    onConfirm: () => Promise<void> | void;
+  }>({
+    isOpen: false,
+    title: "",
+    message: "",
+    confirmText: "Xác nhận",
+    onConfirm: () => {},
+  });
 
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const coverInputRef = useRef<HTMLInputElement>(null);
@@ -359,7 +373,15 @@ export default function EditProfilePage() {
                 <button
                   type="button"
                   disabled={uploadingCover}
-                  onClick={handleRemoveCover}
+                  onClick={() => {
+                    setConfirmDialog({
+                      isOpen: true,
+                      title: "Gỡ ảnh bìa?",
+                      message: "Ảnh bìa của bạn sẽ bị gỡ bỏ khỏi trang cá nhân.",
+                      confirmText: "Gỡ ảnh bìa",
+                      onConfirm: handleRemoveCover,
+                    });
+                  }}
                   className="p-1.5 rounded-xl bg-black/60 hover:bg-black/80 text-white text-xs backdrop-blur-md transition shadow-md active:scale-95 cursor-pointer disabled:cursor-not-allowed"
                   title="Gỡ ảnh bìa"
                 >
@@ -421,8 +443,16 @@ export default function EditProfilePage() {
                       <button
                         type="button"
                         disabled={uploadingAvatar}
-                        onClick={handleRemoveAvatar}
-                        className="px-3 py-1.5 rounded-xl hover:bg-red-50 dark:hover:bg-red-950/40 text-xs font-medium text-red-600 dark:text-red-400 transition inline-flex items-center gap-1.5 border border-transparent hover:border-red-200 dark:hover:border-red-900/50"
+                        onClick={() => {
+                          setConfirmDialog({
+                            isOpen: true,
+                            title: "Gỡ ảnh đại diện?",
+                            message: "Ảnh đại diện của bạn sẽ bị gỡ bỏ và thay thế bằng avatar mặc định.",
+                            confirmText: "Gỡ ảnh",
+                            onConfirm: handleRemoveAvatar,
+                          });
+                        }}
+                        className="px-3 py-1.5 rounded-xl hover:bg-red-50 dark:hover:bg-red-950/40 text-xs font-medium text-red-600 dark:text-red-400 transition inline-flex items-center gap-1.5 border border-transparent hover:border-red-200 dark:hover:border-red-900/50 cursor-pointer disabled:cursor-not-allowed"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                         <span>Gỡ ảnh</span>
@@ -784,6 +814,18 @@ export default function EditProfilePage() {
       <DeleteAccountModal
         isOpen={showDeleteModal}
         onClose={() => setShowDeleteModal(false)}
+      />
+
+      {/* Remove Avatar / Cover Confirmation Modal */}
+      <ConfirmModal
+        isOpen={confirmDialog.isOpen}
+        onClose={() => setConfirmDialog((prev) => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmDialog.onConfirm}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmText={confirmDialog.confirmText}
+        variant="danger"
+        icon="trash"
       />
     </div>
   );

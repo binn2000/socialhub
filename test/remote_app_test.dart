@@ -1556,6 +1556,8 @@ void main() {
       await tapTab(tester, profileTab);
       await tester.tap(find.text('Đăng xuất'));
       await tester.pumpAndSettle();
+      await tester.tap(find.text('Xác nhận đăng xuất'));
+      await tester.pumpAndSettle();
 
       expect(api.logouts, 1);
       expect(find.widgetWithText(FilledButton, 'Đăng nhập'), findsOneWidget);
@@ -2580,12 +2582,16 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Thu hồi tin nhắn'));
       await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Thu hồi'));
+      await tester.pumpAndSettle();
       expect(api.messageActions, ['recall:m1']);
       expect(find.text('tin của tôi'), findsNothing); // gone for everybody
 
       await tester.longPress(find.text('tin của bạn'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Xóa ở phía tôi'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Xóa'));
       await tester.pumpAndSettle();
       expect(api.messageActions, ['recall:m1', 'hide:m2']);
       expect(find.text('tin của bạn'), findsNothing);
@@ -3750,6 +3756,8 @@ void main() {
 
       await tapTab(tester, profileTab);
       await tester.tap(find.text('Đăng xuất'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Xác nhận đăng xuất'));
       await tester.pumpAndSettle();
 
       expect(api.devices.last, '-tok-1');

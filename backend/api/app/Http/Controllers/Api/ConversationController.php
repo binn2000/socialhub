@@ -269,16 +269,19 @@ class ConversationController extends Controller
     public function setQuickReaction(Request $request, string $conversation): array
     {
         $c = self::forParticipant($request, $conversation);
-        $data = $request->validate(['emoji' => ['required', 'string']]);
-        // Accept the emoji with or without the variation selector, store the canonical form.
-        $bare = fn (string $e) => str_replace("\u{FE0F}", '', $e);
-        $emoji = collect(self::QUICK_REACTIONS)->first(fn ($e) => $bare($e) === $bare($data['emoji']));
-        if ($emoji === null) {
+        $data = $request->validate(['emoji' => ['required', 'string', 'max:16']]);
+        $emoji = trim($data['emoji']);
+        // Letters, digits and markup are not emoji; stops text from becoming the button.
+        if ($emoji === '' || preg_match('/[\p{L}\p{N}<>&"\'\s]/u', $emoji)) {
             throw ValidationException::withMessages(['emoji' => [__('validation.in', ['attribute' => 'emoji'])]]);
         }
-        DB::table('conversations')->where('id', $c->id)->update(['quick_reaction' => $emoji]);
+        // Accept the emoji with or without the variation selector, store the canonical form for presets.
+        $bare = fn (string $e) => str_replace("\u{FE0F}", '', $e);
+        $preset = collect(self::QUICK_REACTIONS)->first(fn ($e) => $bare($e) === $bare($emoji));
+        $saved = $preset ?? $emoji;
+        DB::table('conversations')->where('id', $c->id)->update(['quick_reaction' => $saved]);
 
-        return ['data' => ['quickReaction' => $emoji]];
+        return ['data' => ['quickReaction' => $saved]];
     }
 
     public function setTheme(Request $request, string $conversation): array

@@ -480,6 +480,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/videos/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Find videos on YouTube for the Video tab
+         * @description **Authentication:** required. Searches YouTube (Data API v3, key kept on the server) for videos that may be
+         *     embedded, 20 per page, and plays them with YouTube's own embedded player in the clients (nothing is
+         *     downloaded or re-hosted). Without `q` it lists the most popular videos of the configured country
+         *     (`YOUTUBE_REGION`, default `VN`). `cursor` is the `nextCursor` of the previous page. Answers are cached for
+         *     an hour and the route is limited to 20 per minute, because YouTube's free quota is small (a search costs
+         *     100 of the 10,000 daily units). `503` with `code: video_unavailable` when YouTube cannot be reached, the key
+         *     is missing or the daily quota is used up.
+         */
+        get: operations["searchVideos"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/users/{user}/stories": {
         parameters: {
             query?: never;
@@ -2046,9 +2072,8 @@ export interface components {
         /**
          * @description Emoji of the quick send button of a conversation, shared by both people.
          * @default 👍
-         * @enum {string}
          */
-        QuickReaction: "👍" | "❤️" | "😂" | "😮" | "😢" | "😡" | "🔥" | "🎉" | "👏" | "😍" | "🙏" | "💯";
+        QuickReaction: string;
         /**
          * @description Bubble colour theme of a conversation, shared by both people.
          * @default blue
@@ -3166,6 +3191,60 @@ export interface operations {
             429: components["responses"]["TooManyRequests"];
             500: components["responses"]["ServerError"];
             /** @description The music catalogue is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    searchVideos: {
+        parameters: {
+            query?: {
+                q?: string;
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of videos (possibly none). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @description The YouTube video id. */
+                            id: string;
+                            title: string;
+                            channelTitle: string;
+                            /**
+                             * Format: uri
+                             * @description A picture hosted by YouTube (ytimg.com).
+                             */
+                            thumbnailUrl?: string | null;
+                            /** Format: date-time */
+                            publishedAt?: string | null;
+                            durationSeconds?: number | null;
+                        }[];
+                        meta: {
+                            nextCursor: string | null;
+                            hasMore: boolean;
+                        };
+                    };
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["TooManyRequests"];
+            /** @description YouTube is unavailable. */
             503: {
                 headers: {
                     [name: string]: unknown;

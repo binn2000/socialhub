@@ -12,10 +12,12 @@ import {
   Check,
   ExternalLink,
   Pin,
+  Plus,
 } from "lucide-react";
 import { UserAvatar } from "@/components/ui/UserAvatar";
 import { CHAT_THEMES, getChatTheme } from "@/lib/chat-theme";
 import { QUICK_REACTIONS } from "@/lib/quick-reactions";
+import { QuickReactionPickerModal } from "./QuickReactionPickerModal";
 import { timeAgo } from "@/lib/time-ago";
 import { clientFetch } from "@/lib/client-api";
 import type { Conversation, Message } from "@/types";
@@ -82,6 +84,7 @@ export function SharedMediaDrawer({
     file: { items: [], next: null, loaded: false },
   });
   const [loadingMore, setLoadingMore] = useState(false);
+  const [showAllEmojisModal, setShowAllEmojisModal] = useState(false);
 
   // Changes when a picture/file arrives or a message is recalled, so an open drawer stays correct.
   const signature = useMemo(
@@ -265,6 +268,15 @@ export function SharedMediaDrawer({
                   {emoji}
                 </button>
               ))}
+              <button
+                type="button"
+                onClick={() => setShowAllEmojisModal(true)}
+                className="col-span-6 mt-1.5 py-1.5 px-2 text-xs font-semibold text-brand hover:bg-brand/10 rounded-lg transition flex items-center justify-center gap-1.5 border border-dashed border-brand/30 cursor-pointer"
+                title="Chọn từ tất cả biểu tượng cảm xúc"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Xem tất cả biểu tượng...</span>
+              </button>
             </div>
           </div>
 
@@ -422,6 +434,16 @@ export function SharedMediaDrawer({
           )}
         </div>
       </div>
+
+      <QuickReactionPickerModal
+        isOpen={showAllEmojisModal}
+        currentEmoji={quickReaction}
+        onSelectEmoji={(emoji) => {
+          onSelectQuickReaction(emoji);
+          setShowAllEmojisModal(false);
+        }}
+        onClose={() => setShowAllEmojisModal(false)}
+      />
     </div>
   );
 }

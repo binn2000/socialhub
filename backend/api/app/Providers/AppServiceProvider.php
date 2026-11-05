@@ -46,6 +46,7 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('messages', fn (Request $r) => Limit::perMinute(120)->by($r->user()?->id ?: $r->ip()));
         RateLimiter::for('stories', fn (Request $r) => Limit::perHour(30)->by($r->user()?->id ?: $r->ip()));
         RateLimiter::for('reports', fn (Request $r) => Limit::perHour(20)->by($r->user()?->id ?: $r->ip()));
+        RateLimiter::for('video-search', fn (Request $r) => Limit::perMinute(20)->by($r->user()?->id ?: $r->ip()));
         RateLimiter::for('music', fn (Request $r) => Limit::perMinute(30)->by($r->user()?->id ?: $r->ip()));
         RateLimiter::for('notes', fn (Request $r) => Limit::perHour(30)->by($r->user()?->id ?: $r->ip()));
         RateLimiter::for('uploads', fn (Request $r) => Limit::perHour(30)->by($r->user()?->id ?: $r->ip()));

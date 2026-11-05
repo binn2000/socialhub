@@ -117,6 +117,11 @@ export function EmojiStickerPicker({
   const currentCategory = EMOJI_CATEGORIES.find((c) => c.id === activeEmojiCat) || EMOJI_CATEGORIES[0];
   const currentPack = STICKER_PACKS.find((p) => p.id === activeStickerPack) || STICKER_PACKS[0];
 
+  // The rows are new objects every render; keep them in a ref so the effect
+  // runs only when the selection changes, not each time the user scrolls a row.
+  const rowsRef = useRef({ emojiRow, stickerRow });
+  rowsRef.current = { emojiRow, stickerRow };
+
   // Auto-scroll selected tab into view when active tab/category changes
   useEffect(() => {
     const tabId = activeTab === "emojis" ? `tab-cat-${activeEmojiCat}` : `tab-pack-${activeStickerPack}`;
@@ -125,11 +130,12 @@ export function EmojiStickerPicker({
       el.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
     }
     // Recheck scroll boundaries
-    setTimeout(() => {
-      if (activeTab === "emojis") emojiRow.checkScroll();
-      else stickerRow.checkScroll();
+    const timer = setTimeout(() => {
+      if (activeTab === "emojis") rowsRef.current.emojiRow.checkScroll();
+      else rowsRef.current.stickerRow.checkScroll();
     }, 200);
-  }, [activeTab, activeEmojiCat, activeStickerPack, emojiRow, stickerRow]);
+    return () => clearTimeout(timer);
+  }, [activeTab, activeEmojiCat, activeStickerPack]);
 
   // Swipe / Drag left-right handlers on content area to switch categories/tabs
   const contentDragRef = useRef<{

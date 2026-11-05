@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_learning/data/chat_stickers.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_learning/data/mock_data.dart';
 import 'package:flutter_learning/main.dart';
@@ -166,6 +167,128 @@ void main() {
     await tester.tap(find.byTooltip('Gửi 🔥 (giữ để đổi biểu tượng)'));
     await tester.pump();
     expect(sent, ['🔥']);
+  });
+
+  testWidgets(
+    'a long press allows choosing from all emojis beyond the presets',
+    (tester) async {
+      final sent = <String>[];
+      final chat = Conversation(
+        id: 'c',
+        user: mockUsers[1],
+        lastMessage: '',
+        time: '',
+        unreadCount: 0,
+        messages: const [],
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChatScreen(
+            conversations: [chat],
+            conversationId: chat.id,
+            currentUser: currentUser,
+            onSendMessage: (text, {attachmentPaths}) => sent.add(text),
+          ),
+        ),
+      );
+
+      await tester.longPress(find.byTooltip('Gửi 👍 (giữ để đổi biểu tượng)'));
+      await tester.pumpAndSettle();
+      expect(find.text('Xem tất cả biểu tượng cảm xúc...'), findsOneWidget);
+      await tester.tap(find.text('Xem tất cả biểu tượng cảm xúc...'));
+      await tester.pumpAndSettle();
+      expect(find.text('Tất cả biểu tượng cảm xúc'), findsOneWidget);
+
+      // Pick an emoji from the full list, e.g. '😁'
+      await tester.tap(find.text('😁'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Đã đổi biểu tượng cảm xúc nhanh thành 😁'),
+        findsOneWidget,
+      );
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Gửi 😁 (giữ để đổi biểu tượng)'));
+      await tester.pump();
+      expect(sent, ['😁']);
+    },
+  );
+
+  testWidgets('the emoji categories of the quick picker can be swiped', (
+    tester,
+  ) async {
+    final chat = Conversation(
+      id: 'c',
+      user: mockUsers[1],
+      lastMessage: '',
+      time: '',
+      unreadCount: 0,
+      messages: const [],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          conversations: [chat],
+          conversationId: chat.id,
+          currentUser: currentUser,
+          onSendMessage: (text, {attachmentPaths}) {},
+        ),
+      ),
+    );
+
+    Future<void> openAll() async {
+      await tester.tap(find.text('Xem tất cả biểu tượng cảm xúc...'));
+      await tester.pumpAndSettle();
+    }
+
+    await tester.longPress(find.byTooltip('Gửi 👍 (giữ để đổi biểu tượng)'));
+    await tester.pumpAndSettle();
+    await openAll();
+    final second = kEmojiCategories[1].emojis.first;
+    expect(find.text(second), findsNothing);
+
+    await tester.fling(find.byType(PageView), const Offset(-400, 0), 1000);
+    await tester.pumpAndSettle();
+    expect(find.text(second), findsWidgets);
+
+    // Back to the presets and again: the grid must match the selected chip.
+    await tester.tap(find.byTooltip('Quay lại'));
+    await tester.pumpAndSettle();
+    await openAll();
+    expect(find.text(second), findsWidgets);
+  });
+
+  testWidgets('the emoji categories of the message picker can be swiped', (
+    tester,
+  ) async {
+    final chat = Conversation(
+      id: 'c',
+      user: mockUsers[1],
+      lastMessage: '',
+      time: '',
+      unreadCount: 0,
+      messages: const [],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          conversations: [chat],
+          conversationId: chat.id,
+          currentUser: currentUser,
+          onSendMessage: (text, {attachmentPaths}) {},
+        ),
+      ),
+    );
+
+    await tester.tap(find.byTooltip('Chèn biểu tượng cảm xúc & nhãn dán'));
+    await tester.pumpAndSettle();
+    final second = kEmojiCategories[1].emojis.first;
+    expect(find.text(second), findsNothing);
+
+    await tester.fling(find.byType(PageView), const Offset(-400, 0), 1000);
+    await tester.pumpAndSettle();
+    expect(find.text(second), findsWidgets);
   });
 
   testWidgets('an empty box offers a quick 👍 instead of the send button', (

@@ -10,6 +10,7 @@ import { timeAgo } from "@/lib/time-ago";
 import { clientFetch } from "@/lib/client-api";
 import { ApiRequestError } from "@/lib/errors";
 import { ReportModal } from "./ReportModal";
+import { ConfirmModal } from "@/components/ui/ConfirmModal";
 import type { Post, Comment } from "@/types";
 
 interface CommentsModalProps {
@@ -34,6 +35,7 @@ export function CommentsModal({
   const [content, setContent] = useState("");
   const [sending, setSending] = useState(false);
   const [reportingComment, setReportingComment] = useState<Comment | null>(null);
+  const [deletingCommentId, setDeletingCommentId] = useState<string | null>(null);
 
   const commentsEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -214,8 +216,8 @@ export function CommentsModal({
 
                     {canDelete(comment) ? (
                       <button
-                        onClick={() => handleDelete(comment.id)}
-                        className="text-appText-secondary hover:text-red-600 dark:hover:text-red-400 transition"
+                        onClick={() => setDeletingCommentId(comment.id)}
+                        className="text-appText-secondary hover:text-red-600 dark:hover:text-red-400 transition cursor-pointer"
                         title="Xóa bình luận"
                       >
                         Xóa
@@ -283,6 +285,22 @@ export function CommentsModal({
           targetTitle="bình luận"
         />
       )}
+
+      {/* Delete Comment Confirm Modal */}
+      <ConfirmModal
+        isOpen={Boolean(deletingCommentId)}
+        onClose={() => setDeletingCommentId(null)}
+        onConfirm={() => {
+          if (deletingCommentId) {
+            handleDelete(deletingCommentId);
+          }
+        }}
+        title="Xóa bình luận này?"
+        message="Bình luận này sẽ bị xóa vĩnh viễn và không thể khôi phục lại."
+        confirmText="Xóa bình luận"
+        variant="danger"
+        icon="trash"
+      />
     </div>
   );
 }

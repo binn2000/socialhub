@@ -2520,6 +2520,10 @@ class _MainScreenState extends State<MainScreen> {
         onOpenMessages: _openMessages,
         savedPostIds: _savedPostIds,
         onToggleSave: widget.api.isRemote ? _handleToggleSave : null,
+        searchVideos: widget.api.isRemote
+            ? (query, cursor) =>
+                  _guard(() => widget.api.searchVideos(query, cursor: cursor))
+            : null,
       ),
       FriendsScreen(
         users: _users,

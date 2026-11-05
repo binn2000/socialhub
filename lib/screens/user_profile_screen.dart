@@ -138,6 +138,31 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     }
   }
 
+  Future<void> _confirmUnfollow(UserProfile profile) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Bỏ theo dõi ${profile.user.name}?'),
+        content: Text(
+          'Bạn sẽ không còn nhìn thấy bài viết của ${profile.user.name} trên bảng tin của mình nữa.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Bỏ theo dõi'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && widget.onUnfollow != null) {
+      await _act(() => widget.onUnfollow!(profile.user.id));
+    }
+  }
+
   Future<void> _confirmBlock(UserProfile profile) async {
     final name = profile.user.name;
     final confirmed = await showDialog<bool>(
@@ -183,9 +208,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     if (widget.onFollow != null && widget.onUnfollow != null) {
       if (profile.isFollowing) {
         followButton = OutlinedButton.icon(
-          onPressed: _busy
-              ? null
-              : () => _act(() => widget.onUnfollow!(profile.user.id)),
+          onPressed: _busy ? null : () => _confirmUnfollow(profile),
           icon: const Icon(Icons.check_rounded, size: 18),
           label: const Text('Đang theo dõi'),
         );
