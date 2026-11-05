@@ -285,6 +285,14 @@ Conversation conversationFromJson(
     time: timeAgo((last?['createdAt'] ?? json['updatedAt']) as String),
     unreadCount: json['unreadCount'] as int,
     messages: const [],
+    partnerDeliveredId: json['partnerLastDeliveredMessageId'] as String?,
+    partnerReadId: json['partnerLastReadMessageId'] as String?,
+    pinnedMessage: json['pinnedMessage'] == null
+        ? null
+        : messageFromJson(
+            json['pinnedMessage'] as Json,
+            absoluteUrl: absoluteUrl,
+          ),
   );
 }
 

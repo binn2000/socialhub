@@ -752,6 +752,15 @@ class HttpSocialApi extends SocialApi {
           messages: messages,
           otherTyping: typing,
           states: messageStatesFromJson(meta['states']),
+          hasChatMeta: meta.containsKey('pinnedMessage'),
+          partnerDeliveredId: meta['partnerLastDeliveredMessageId'] as String?,
+          partnerReadId: meta['partnerLastReadMessageId'] as String?,
+          pinnedMessage: meta['pinnedMessage'] == null
+              ? null
+              : messageFromJson(
+                  meta['pinnedMessage'] as Json,
+                  absoluteUrl: _absoluteUrl,
+                ),
         );
       }
       after = page.last.id;
@@ -772,6 +781,29 @@ class HttpSocialApi extends SocialApi {
         as Json,
     absoluteUrl: _absoluteUrl,
   );
+
+  @override
+  Future<ChatMessage?> pinMessage(
+    String conversationId,
+    String messageId,
+  ) async {
+    final data =
+        (await _request(
+              'PUT',
+              '/conversations/$conversationId/pin',
+              data: {'messageId': messageId},
+            ))['data']
+            as Json;
+    return messageFromJson(
+      data['pinnedMessage'] as Json,
+      absoluteUrl: _absoluteUrl,
+    );
+  }
+
+  @override
+  Future<void> unpinMessage(String conversationId) async {
+    await _request('DELETE', '/conversations/$conversationId/pin');
+  }
 
   @override
   Future<ChatMessage?> recallMessage(

@@ -207,6 +207,42 @@ void main() {
     expect(old.myReaction, isNull);
   });
 
+  test('a conversation carries the other person\'s markers and the pin', () {
+    final conversation = conversationFromJson({
+      'id': 'c1',
+      'participant': _author(),
+      'lastMessage': null,
+      'partnerLastDeliveredMessageId': 'm5',
+      'partnerLastReadMessageId': 'm3',
+      'pinnedMessage': {
+        'id': 'm2',
+        'conversationId': 'c1',
+        'senderId': 'u1',
+        'text': 'Hẹn 7h tối nay',
+        'isRecalled': false,
+        'reactions': <String, dynamic>{},
+        'myReaction': null,
+        'attachments': <Object>[],
+        'createdAt': DateTime.now().toUtc().toIso8601String(),
+      },
+      'unreadCount': 0,
+      'updatedAt': DateTime.now().toUtc().toIso8601String(),
+    });
+    expect(conversation.partnerDeliveredId, 'm5');
+    expect(conversation.partnerReadId, 'm3');
+    expect(conversation.pinnedMessage?.text, 'Hẹn 7h tối nay');
+
+    final plain = conversationFromJson({
+      'id': 'c2',
+      'participant': _author(),
+      'lastMessage': null,
+      'unreadCount': 0,
+      'updatedAt': DateTime.now().toUtc().toIso8601String(),
+    });
+    expect(plain.pinnedMessage, isNull);
+    expect(plain.partnerReadId, isNull);
+  });
+
   test('a conversation whose last message was recalled says so', () {
     final conversation = conversationFromJson({
       'id': 'c1',

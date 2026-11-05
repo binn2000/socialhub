@@ -1379,6 +1379,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/conversations/{conversation}/pin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation: components["parameters"]["ConversationId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Pin a message for both people
+         * @description **Authentication:** required. **Authorization:** participants only. One pin per conversation: pinning another
+         *     message replaces it. The message must be in the conversation, not deleted by the caller (`404`) and not recalled
+         *     (`409`, `message_recalled`). Recalling the pinned message removes the pin.
+         */
+        put: operations["pinMessage"];
+        post?: never;
+        /**
+         * Remove the pin
+         * @description **Authentication:** required. Either person can remove it. Idempotent.
+         */
+        delete: operations["unpinMessage"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/conversations/{conversation}/read": {
         parameters: {
             query?: never;
@@ -1964,6 +1992,12 @@ export interface components {
         };
         Conversation: {
             id: components["schemas"]["Id"];
+            /** @description The newest message the other person's app has fetched ("Đã nhận": two ticks). Message ids grow, so a message of mine is delivered when its id is not greater than this. */
+            partnerLastDeliveredMessageId: components["schemas"]["Id"] | null;
+            /** @description The newest message the other person has read ("Đã xem": their avatar under it). */
+            partnerLastReadMessageId: components["schemas"]["Id"] | null;
+            /** @description The message pinned for both people, or null (also null when it was recalled or the caller deleted it). */
+            pinnedMessage: components["schemas"]["Message"] | null;
             participant: components["schemas"]["UserSummary"] & {
                 isOnline: components["schemas"]["IsOnline"];
                 lastSeenAt: components["schemas"]["LastSeenAt"];
@@ -2142,6 +2176,9 @@ export interface components {
             data: components["schemas"]["Message"][];
             meta: components["schemas"]["CursorMeta"] & {
                 otherTyping: boolean;
+                partnerLastDeliveredMessageId?: components["schemas"]["Id"] | null;
+                partnerLastReadMessageId?: components["schemas"]["Id"] | null;
+                pinnedMessage?: components["schemas"]["Message"] | null;
                 /** @description Only with `after`: what can still change on the latest 100 messages, keyed by message id, so an open chat can follow reactions and recalls. */
                 states?: {
                     [key: string]: {
@@ -4445,6 +4482,78 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    pinMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation: components["parameters"]["ConversationId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    messageId: components["schemas"]["Id"];
+                };
+            };
+        };
+        responses: {
+            /** @description The pinned message. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            pinnedMessage: components["schemas"]["Message"];
+                        };
+                    };
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            404: components["responses"]["NotFound"];
+            /** @description The message was recalled. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    unpinMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation: components["parameters"]["ConversationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No pinned message any more. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            pinnedMessage: null;
+                        };
+                    };
+                };
             };
             401: components["responses"]["Unauthenticated"];
             404: components["responses"]["NotFound"];

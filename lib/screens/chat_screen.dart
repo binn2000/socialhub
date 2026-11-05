@@ -4,7 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_learning/data/chat_interactions.dart';
 import 'package:flutter_learning/data/chat_stickers.dart';
+import 'package:flutter_learning/models/chat_theme.dart';
 import 'package:flutter_learning/models/message.dart';
+import 'package:flutter_learning/utils/chat_search.dart';
+import 'package:flutter_learning/utils/message_status.dart';
 import 'package:flutter_learning/models/user.dart';
 import 'package:flutter_learning/theme/app_tokens.dart';
 import 'package:flutter_learning/widgets/image_viewer.dart';
@@ -31,6 +34,11 @@ class ChatScreen extends StatefulWidget {
   final Future<void> Function(String messageId)? onRecallMessage;
   final Future<void> Function(String messageId)? onHideMessage;
 
+  /// Pins a message for both people, or removes the pin (server only; without
+  /// them the pin is kept in this screen alone, as in the mock app).
+  final Future<void> Function(String messageId)? onPinMessage;
+  final Future<void> Function()? onUnpinMessage;
+
   /// Sends a text to another conversation, for "Chuyển tiếp".
   final void Function(String conversationId, String text)? onSendMessageTo;
 
@@ -56,6 +64,8 @@ class ChatScreen extends StatefulWidget {
     this.onRecallMessage,
     this.onHideMessage,
     this.onSendMessageTo,
+    this.onPinMessage,
+    this.onUnpinMessage,
     this.isPartnerTyping = false,
     this.onTyping,
     this.refresh,
@@ -96,6 +106,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // Pinned message state
   String? _pinnedMessageId;
+
+  // Chat theme state
+  String _chatThemeId = 'blue';
 
   Conversation get _conversation => widget.conversations.firstWhere(
     (conversation) => conversation.id == widget.conversationId,
@@ -145,6 +158,88 @@ class _ChatScreenState extends State<ChatScreen> {
         _pendingAttachmentPaths.add(path);
       }
     });
+  }
+
+  /// The server keeps the pin and the delivered / seen markers.
+  bool get _serverState => widget.onPinMessage != null;
+
+  String? _pinnedId(Conversation c) =>
+      _serverState ? c.pinnedMessage?.id : _pinnedMessageId;
+
+  Future<void> _togglePin(Conversation c, ChatMessage message) async {
+    final unpin = _pinnedId(c) == message.id;
+    if (_serverState) {
+      await (unpin
+          ? widget.onUnpinMessage!()
+          : widget.onPinMessage!(message.id));
+    } else {
+      setState(() => _pinnedMessageId = unpin ? null : message.id);
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          unpin
+              ? 'Đã bỏ ghim tin nhắn'
+              : (_serverState
+                    ? 'Đã ghim tin nhắn cho cả hai người'
+                    : 'Đã ghim tin nhắn lên đầu cuộc trò chuyện'),
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  /// Ticks under one of my messages; the other person's small avatar marks
+  /// the last one they have seen.
+  Widget _sendStatus(
+    ChatMessage message,
+    Conversation conversation,
+    String? lastSeenId,
+    ColorScheme colorScheme,
+    AppPalette palette,
+  ) {
+    final state = sendState(
+      message.id,
+      conversation.partnerDeliveredId,
+      conversation.partnerReadId,
+    );
+    final grey = palette.textSecondary.withValues(alpha: 0.6);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Tooltip(
+          message: switch (state) {
+            SendState.sending => 'Đang gửi',
+            SendState.sent => 'Đã gửi',
+            SendState.delivered => 'Đã nhận',
+            SendState.seen => 'Đã xem',
+          },
+          child: Icon(
+            state == SendState.sending
+                ? Icons.access_time_rounded
+                : (state == SendState.sent
+                      ? Icons.done_rounded
+                      : Icons.done_all_rounded),
+            size: 14,
+            color: state == SendState.seen ? colorScheme.primary : grey,
+          ),
+        ),
+        if (message.id == lastSeenId) ...[
+          const SizedBox(width: 4),
+          UserAvatar(imageUrl: conversation.user.avatarUrl, radius: 7),
+          const SizedBox(width: 2),
+          Text(
+            'Đã xem',
+            style: TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w600,
+              color: colorScheme.primary,
+            ),
+          ),
+        ],
+      ],
+    );
   }
 
   bool _isUnsent(ChatMessage m) =>
@@ -410,33 +505,19 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
                 ListTile(
                   leading: Icon(
-                    _pinnedMessageId == message.id
+                    _pinnedId(_conversation) == message.id
                         ? Icons.push_pin_outlined
                         : Icons.push_pin_rounded,
                     color: Colors.amber,
                   ),
                   title: Text(
-                    _pinnedMessageId == message.id
+                    _pinnedId(_conversation) == message.id
                         ? 'Bỏ ghim tin nhắn'
                         : 'Ghim tin nhắn',
                   ),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    setState(() {
-                      _pinnedMessageId = _pinnedMessageId == message.id
-                          ? null
-                          : message.id;
-                    });
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          _pinnedMessageId != null
-                              ? 'Đã ghim tin nhắn lên đầu cuộc trò chuyện'
-                              : 'Đã bỏ ghim tin nhắn',
-                        ),
-                        duration: const Duration(seconds: 2),
-                      ),
-                    );
+                    _togglePin(_conversation, message);
                   },
                 ),
                 if (isMine)
@@ -533,11 +614,380 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  void _openSharedMediaSheet(BuildContext context) {
+    final conversation = _conversation;
+    final colorScheme = Theme.of(context).colorScheme;
+    final palette = AppPalette.of(context);
+
+    final mediaAttachments = <ChatAttachment>[];
+    final fileAttachments = <ChatAttachment>[];
+
+    for (final m in conversation.messages) {
+      if (_deletedMessageIds.contains(m.id) ||
+          _unsentMessageIds.contains(m.id)) {
+        continue;
+      }
+      for (final att in m.attachments) {
+        if (att.isImage) {
+          mediaAttachments.add(att);
+        } else {
+          fileAttachments.add(att);
+        }
+      }
+    }
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (bottomSheetContext) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.85,
+              decoration: BoxDecoration(
+                color: Theme.of(context).scaffoldBackgroundColor,
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(24),
+                ),
+              ),
+              child: DefaultTabController(
+                length: 2,
+                child: Column(
+                  children: [
+                    const SizedBox(height: 12),
+                    Center(
+                      child: Container(
+                        width: 40,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: palette.border,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Thông tin hội thoại',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close_rounded),
+                            onPressed: () => Navigator.pop(bottomSheetContext),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: ListView(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        children: [
+                          Center(
+                            child: Column(
+                              children: [
+                                UserAvatar(
+                                  imageUrl: conversation.user.avatarUrl,
+                                  radius: 36,
+                                ),
+                                const SizedBox(height: 10),
+                                Text(
+                                  conversation.user.name,
+                                  style: const TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  conversation.user.isOnline
+                                      ? 'Đang trực tuyến'
+                                      : (conversation.user.lastSeenAt != null
+                                            ? 'Hoạt động ${conversation.user.lastSeenAt}'
+                                            : 'Ngoại tuyến'),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: conversation.user.isOnline
+                                        ? palette.success
+                                        : palette.textSecondary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          Text(
+                            'CHỦ ĐỀ ĐOẠN CHAT',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.5,
+                              color: palette.textSecondary,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          SizedBox(
+                            height: 72,
+                            child: ListView.separated(
+                              scrollDirection: Axis.horizontal,
+                              itemCount: ChatThemes.all.length,
+                              separatorBuilder: (context, index) =>
+                                  const SizedBox(width: 14),
+                              itemBuilder: (context, idx) {
+                                final themeOption = ChatThemes.all[idx];
+                                final isSelected =
+                                    themeOption.id == _chatThemeId;
+                                return GestureDetector(
+                                  onTap: () {
+                                    setState(() {
+                                      _chatThemeId = themeOption.id;
+                                    });
+                                    setSheetState(() {});
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                          'Đã đổi chủ đề sang ${themeOption.name}',
+                                        ),
+                                        duration: const Duration(seconds: 2),
+                                      ),
+                                    );
+                                  },
+                                  child: Column(
+                                    children: [
+                                      Container(
+                                        width: 42,
+                                        height: 42,
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          gradient: themeOption.gradient,
+                                          color: themeOption.primaryColor,
+                                          border: isSelected
+                                              ? Border.all(
+                                                  color: colorScheme.onSurface,
+                                                  width: 2.5,
+                                                )
+                                              : null,
+                                          boxShadow: isSelected
+                                              ? [
+                                                  BoxShadow(
+                                                    color: themeOption
+                                                        .primaryColor
+                                                        .withValues(alpha: 0.4),
+                                                    blurRadius: 8,
+                                                    spreadRadius: 1,
+                                                  ),
+                                                ]
+                                              : null,
+                                        ),
+                                        child: isSelected
+                                            ? const Icon(
+                                                Icons.check_rounded,
+                                                color: Colors.white,
+                                                size: 20,
+                                              )
+                                            : null,
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        themeOption.name,
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: isSelected
+                                              ? FontWeight.bold
+                                              : FontWeight.normal,
+                                          color: isSelected
+                                              ? colorScheme.primary
+                                              : palette.textSecondary,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          const Divider(),
+                          const SizedBox(height: 8),
+                          TabBar(
+                            labelColor: colorScheme.primary,
+                            unselectedLabelColor: palette.textSecondary,
+                            indicatorColor: colorScheme.primary,
+                            tabs: [
+                              Tab(
+                                icon: const Icon(
+                                  Icons.photo_library_outlined,
+                                  size: 20,
+                                ),
+                                text: 'Ảnh (${mediaAttachments.length})',
+                              ),
+                              Tab(
+                                icon: const Icon(
+                                  Icons.insert_drive_file_outlined,
+                                  size: 20,
+                                ),
+                                text: 'Tài liệu (${fileAttachments.length})',
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            height: 320,
+                            child: TabBarView(
+                              children: [
+                                mediaAttachments.isEmpty
+                                    ? Center(
+                                        child: Column(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
+                                            Icon(
+                                              Icons.photo_outlined,
+                                              size: 48,
+                                              color: palette.textSecondary
+                                                  .withValues(alpha: 0.4),
+                                            ),
+                                            const SizedBox(height: 8),
+                                            Text(
+                                              'Chưa có ảnh nào được gửi',
+                                              style: TextStyle(
+                                                fontSize: 13,
+                                                color: palette.textSecondary,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      )
+                                    : GridView.builder(
+                                        itemCount: mediaAttachments.length,
+                                        gridDelegate:
+                                            const SliverGridDelegateWithFixedCrossAxisCount(
+                                              crossAxisCount: 3,
+                                              crossAxisSpacing: 6,
+                                              mainAxisSpacing: 6,
+                                            ),
+                                        itemBuilder: (context, i) {
+                                          final att = mediaAttachments[i];
+                                          return GestureDetector(
+                                            onTap: () => showImageViewer(
+                                              context,
+                                              att.url,
+                                            ),
+                                            child: ClipRRect(
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                              child: Image.network(
+                                                att.url,
+                                                fit: BoxFit.cover,
+                                                errorBuilder:
+                                                    (
+                                                      context,
+                                                      error,
+                                                      stackTrace,
+                                                    ) => Container(
+                                                      color: palette.border,
+                                                      child: const Icon(
+                                                        Icons
+                                                            .broken_image_rounded,
+                                                      ),
+                                                    ),
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                fileAttachments.isEmpty
+                                    ? Center(
+                                        child: Column(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
+                                            Icon(
+                                              Icons.description_outlined,
+                                              size: 48,
+                                              color: palette.textSecondary
+                                                  .withValues(alpha: 0.4),
+                                            ),
+                                            const SizedBox(height: 8),
+                                            Text(
+                                              'Chưa có tệp tài liệu nào',
+                                              style: TextStyle(
+                                                fontSize: 13,
+                                                color: palette.textSecondary,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      )
+                                    : ListView.builder(
+                                        itemCount: fileAttachments.length,
+                                        itemBuilder: (context, i) {
+                                          final att = fileAttachments[i];
+                                          return ListTile(
+                                            contentPadding: EdgeInsets.zero,
+                                            leading: Container(
+                                              padding: const EdgeInsets.all(8),
+                                              decoration: BoxDecoration(
+                                                color: colorScheme.primary
+                                                    .withValues(alpha: 0.1),
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
+                                              ),
+                                              child: Icon(
+                                                Icons.insert_drive_file_rounded,
+                                                color: colorScheme.primary,
+                                              ),
+                                            ),
+                                            title: Text(
+                                              att.name,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                            subtitle: Text(
+                                              att.formattedSize,
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: palette.textSecondary,
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                      ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final palette = AppPalette.of(context);
     final conversation = _conversation;
+    final selectedTheme = ChatThemes.findById(_chatThemeId);
     if (conversation.messages.length != _shownMessageCount) {
       _shownMessageCount = conversation.messages.length;
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
@@ -553,41 +1003,45 @@ class _ChatScreenState extends State<ChatScreen> {
                 tooltip: 'Quay lại danh sách tin nhắn',
                 icon: const Icon(Icons.arrow_back_rounded),
               ),
-        title: Row(
-          children: [
-            UserAvatar(imageUrl: conversation.user.avatarUrl, radius: 18),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    conversation.user.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
+        title: GestureDetector(
+          onTap: () => _openSharedMediaSheet(context),
+          behavior: HitTestBehavior.opaque,
+          child: Row(
+            children: [
+              UserAvatar(imageUrl: conversation.user.avatarUrl, radius: 18),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      conversation.user.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
-                  ),
-                  Text(
-                    conversation.user.isOnline
-                        ? 'Đang hoạt động'
-                        : (conversation.user.lastSeenAt != null
-                              ? 'Hoạt động ${conversation.user.lastSeenAt}'
-                              : 'Đang ngoại tuyến'),
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w500,
-                      color: conversation.user.isOnline
-                          ? palette.success
-                          : palette.textSecondary,
+                    Text(
+                      conversation.user.isOnline
+                          ? 'Đang hoạt động'
+                          : (conversation.user.lastSeenAt != null
+                                ? 'Hoạt động ${conversation.user.lastSeenAt}'
+                                : 'Đang ngoại tuyến'),
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        color: conversation.user.isOnline
+                            ? palette.success
+                            : palette.textSecondary,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
         actions: [
           IconButton(
@@ -605,6 +1059,11 @@ class _ChatScreenState extends State<ChatScreen> {
               });
             },
           ),
+          IconButton(
+            icon: const Icon(Icons.info_outline_rounded),
+            tooltip: 'Thông tin hội thoại, chủ đề & tệp chia sẻ',
+            onPressed: () => _openSharedMediaSheet(context),
+          ),
         ],
       ),
       body: SafeArea(
@@ -616,15 +1075,16 @@ class _ChatScreenState extends State<ChatScreen> {
 
             final matchingMessages = _searchQuery.isEmpty
                 ? <ChatMessage>[]
-                : visibleMessages.where((m) {
-                    final parsed = parseChatMessageReply(m.text);
-                    return parsed.cleanText.toLowerCase().contains(
-                      _searchQuery.toLowerCase(),
-                    );
-                  }).toList();
+                : visibleMessages
+                      .where((m) => messageMatches(m, _searchQuery))
+                      .toList();
 
+            // The server sends the pinned message itself (it can be older than what is
+            // loaded); the mock app pins one of the loaded messages.
             ChatMessage? pinnedMessage;
-            if (_pinnedMessageId != null) {
+            if (_serverState) {
+              pinnedMessage = conversation.pinnedMessage;
+            } else if (_pinnedMessageId != null) {
               for (final m in visibleMessages) {
                 if (m.id == _pinnedMessageId) {
                   pinnedMessage = m;
@@ -632,6 +1092,12 @@ class _ChatScreenState extends State<ChatScreen> {
                 }
               }
             }
+
+            final lastSeenId = lastSeenOfMine(
+              visibleMessages,
+              widget.currentUser.id,
+              conversation.partnerReadId,
+            );
 
             ChatMessage? lastMyMessage;
             for (final m in visibleMessages.reversed) {
@@ -813,15 +1279,8 @@ class _ChatScreenState extends State<ChatScreen> {
                             minWidth: 24,
                             minHeight: 24,
                           ),
-                          onPressed: () {
-                            setState(() => _pinnedMessageId = null);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Đã bỏ ghim tin nhắn'),
-                                duration: Duration(seconds: 1),
-                              ),
-                            );
-                          },
+                          onPressed: () =>
+                              _togglePin(conversation, pinnedMessage!),
                         ),
                       ],
                     ),
@@ -1074,7 +1533,17 @@ class _ChatScreenState extends State<ChatScreen> {
                                                   .withValues(alpha: 0.7),
                                             ),
                                           ),
-                                          if (isMine) ...[
+                                          if (isMine && _serverState) ...[
+                                            const SizedBox(width: 4),
+                                            _sendStatus(
+                                              message,
+                                              conversation,
+                                              lastSeenId,
+                                              colorScheme,
+                                              palette,
+                                            ),
+                                          ],
+                                          if (isMine && !_serverState) ...[
                                             const SizedBox(width: 4),
                                             if (message.id ==
                                                 lastMyMessage?.id) ...[
@@ -1137,7 +1606,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                       ),
                                       decoration: isMine
                                           ? BoxDecoration(
-                                              color: colorScheme.primary,
+                                              color: selectedTheme.primaryColor,
+                                              gradient: selectedTheme.gradient,
                                               borderRadius:
                                                   BorderRadius.circular(
                                                     AppRadius.md,
@@ -1266,7 +1736,17 @@ class _ChatScreenState extends State<ChatScreen> {
                                                             ),
                                                 ),
                                               ),
-                                              if (isMine) ...[
+                                              if (isMine && _serverState) ...[
+                                                const SizedBox(width: 4),
+                                                _sendStatus(
+                                                  message,
+                                                  conversation,
+                                                  lastSeenId,
+                                                  colorScheme,
+                                                  palette,
+                                                ),
+                                              ],
+                                              if (isMine && !_serverState) ...[
                                                 const SizedBox(width: 4),
                                                 if (message.id ==
                                                     lastMyMessage?.id) ...[
@@ -1636,8 +2116,8 @@ class _ChatScreenState extends State<ChatScreen> {
                       FloatingActionButton.small(
                         onPressed: _sendMessage,
                         tooltip: 'Gửi tin nhắn',
-                        backgroundColor: colorScheme.primary,
-                        foregroundColor: colorScheme.onPrimary,
+                        backgroundColor: selectedTheme.primaryColor,
+                        foregroundColor: selectedTheme.textColor,
                         elevation: 0,
                         child: const Icon(Icons.send_rounded),
                       ),

@@ -860,6 +860,65 @@ void main() {
     expect(poll.states['m2']?.isRecalled, isTrue);
   });
 
+  test(
+    'a poll brings the markers and the pin; pinning uses its endpoint',
+    () async {
+      final pinned = {
+        'id': 'm2',
+        'conversationId': 'c1',
+        'senderId': 'u2',
+        'text': 'Hẹn 7h tối nay',
+        'isRecalled': false,
+        'reactions': <String, dynamic>{},
+        'myReaction': null,
+        'attachments': <Object>[],
+        'createdAt': '2026-10-23T10:00:03Z',
+      };
+      adapter.routes['GET /conversations/c1/messages'] = (
+        200,
+        {
+          'data': <Object>[],
+          'meta': {
+            'nextCursor': null,
+            'hasMore': false,
+            'otherTyping': false,
+            'states': <String, dynamic>{},
+            'partnerLastDeliveredMessageId': 'm5',
+            'partnerLastReadMessageId': 'm3',
+            'pinnedMessage': pinned,
+          },
+        },
+      );
+      adapter.routes['PUT /conversations/c1/pin'] = (
+        200,
+        {
+          'data': {'pinnedMessage': pinned},
+        },
+      );
+      adapter.routes['DELETE /conversations/c1/pin'] = (
+        200,
+        {
+          'data': {'pinnedMessage': null},
+        },
+      );
+      await _signedInUser(api, adapter, tokens);
+
+      final poll = await api.loadNewMessages('c1', afterMessageId: 'm0');
+      expect(poll.hasChatMeta, isTrue);
+      expect(poll.partnerDeliveredId, 'm5');
+      expect(poll.partnerReadId, 'm3');
+      expect(poll.pinnedMessage?.text, 'Hẹn 7h tối nay');
+
+      final saved = await api.pinMessage('c1', 'm2');
+      expect(adapter.last('PUT /conversations/c1/pin').data, {
+        'messageId': 'm2',
+      });
+      expect(saved?.id, 'm2');
+      await api.unpinMessage('c1');
+      expect(adapter.requests.last.method, 'DELETE');
+    },
+  );
+
   test('a reaction is sent in the body of the like request', () async {
     adapter.routes['PUT /posts/p1/like'] = (
       200,

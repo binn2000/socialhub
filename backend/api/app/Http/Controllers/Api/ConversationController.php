@@ -73,6 +73,12 @@ class ConversationController extends Controller
         $page = $rows->take($limit)->values();
         $last = $page->last();
 
+        // Loading the list is how this person's app gets the newest messages: they are "delivered".
+        DB::table('conversation_participants as cp')->join('conversations as c', 'c.id', '=', 'cp.conversation_id')
+            ->where('cp.user_id', $me->id)->whereIn('cp.conversation_id', $page->pluck('id'))->whereNotNull('c.last_message_id')
+            ->where(fn ($w) => $w->whereNull('cp.last_delivered_message_id')->orWhereColumn('cp.last_delivered_message_id', '<', 'c.last_message_id'))
+            ->update(['cp.last_delivered_message_id' => DB::raw('c.last_message_id')]);
+
         return [
             'data' => $this->presentMany($page, $me),
             'meta' => [
@@ -134,6 +140,7 @@ class ConversationController extends Controller
         }
 
         $limit = (int) $request->query('limit', 30);
+        $this->markDelivered($c, $request->user());
         $query = Message::where('conversation_id', $c->id)
             ->whereNotExists(fn ($h) => $h->selectRaw('1')->from('message_hidden')
                 ->whereColumn('message_hidden.message_id', 'messages.id')->where('message_hidden.user_id', $request->user()->id));
@@ -152,7 +159,7 @@ class ConversationController extends Controller
                     'otherTyping' => $this->otherTyping($c, $request->user()),
                     // What can still change on the latest messages (reactions, recall), so an open chat can follow it.
                     'states' => $this->recentStates($c, $request->user()),
-                ],
+                ] + $this->chatMeta($c, $request->user()),
             ];
         }
 
@@ -174,8 +181,76 @@ class ConversationController extends Controller
                 'nextCursor' => $hasMore ? Cursor::encode($scope, $last->created_at->format(self::MS), $last->id) : null,
                 'hasMore' => $hasMore,
                 'otherTyping' => $this->otherTyping($c, $request->user()),
-            ],
+            ] + $this->chatMeta($c, $request->user()),
         ];
+    }
+
+    /** Marks everything in the conversation as fetched ("Đã nhận") by this person. */
+    private function markDelivered(Conversation $c, User $me): void
+    {
+        $latest = Message::where('conversation_id', $c->id)->max('id');
+        if ($latest === null) {
+            return;
+        }
+
+        DB::table('conversation_participants')->where(['conversation_id' => $c->id, 'user_id' => $me->id])
+            ->where(fn ($w) => $w->whereNull('last_delivered_message_id')->orWhere('last_delivered_message_id', '<', $latest))
+            ->update(['last_delivered_message_id' => $latest]);
+    }
+
+    /**
+     * What the open chat needs besides the messages: how far the other person has fetched and read
+     * (for the ticks and "Đã xem") and the pinned message.
+     *
+     * @return array{partnerLastDeliveredMessageId: ?string, partnerLastReadMessageId: ?string, pinnedMessage: ?array}
+     */
+    private function chatMeta(Conversation $c, User $me): array
+    {
+        $partner = DB::table('conversation_participants')->where('conversation_id', $c->id)->where('user_id', '!=', $me->id)->first();
+
+        return [
+            'partnerLastDeliveredMessageId' => $partner?->last_delivered_message_id,
+            'partnerLastReadMessageId' => $partner?->last_read_message_id,
+            'pinnedMessage' => $this->pinnedFor($c, $me),
+        ];
+    }
+
+    /** The pinned message as the caller sees it: null when there is none, it was recalled or the caller deleted it. */
+    private function pinnedFor(Conversation $c, User $me): ?array
+    {
+        if (! $c->pinned_message_id) {
+            return null;
+        }
+
+        $message = Message::where('conversation_id', $c->id)->where('id', $c->pinned_message_id)->whereNull('recalled_at')
+            ->whereNotExists(fn ($h) => $h->selectRaw('1')->from('message_hidden')
+                ->whereColumn('message_hidden.message_id', 'messages.id')->where('message_hidden.user_id', $me->id))
+            ->first();
+
+        return $message ? $this->presentMessage($message, $me) : null;
+    }
+
+    public function pin(Request $request, string $conversation): array
+    {
+        $c = self::forParticipant($request, $conversation);
+        $data = $request->validate(['messageId' => ['required', 'string']]);
+        $message = $this->visibleMessage($request, $c, $data['messageId']);
+
+        if ($message->recalled_at) {
+            abort(response()->json(['message' => __('The message was recalled.'), 'code' => 'message_recalled'], 409));
+        }
+
+        DB::table('conversations')->where('id', $c->id)->update(['pinned_message_id' => $message->id]);
+
+        return ['data' => ['pinnedMessage' => $this->presentMessage($message, $request->user())]];
+    }
+
+    public function unpin(Request $request, string $conversation): array
+    {
+        $c = self::forParticipant($request, $conversation);
+        DB::table('conversations')->where('id', $c->id)->update(['pinned_message_id' => null]);
+
+        return ['data' => ['pinnedMessage' => null]];
     }
 
     private const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp'];
@@ -323,6 +398,11 @@ class ConversationController extends Controller
                 ->where(['conversation_id' => $c->id, 'user_id' => $request->user()->id])
                 ->where(fn ($q) => $q->whereNull('last_read_message_id')->orWhere('last_read_message_id', '<', $upTo))
                 ->update(['last_read_message_id' => $upTo]);
+            // What was read was also received.
+            DB::table('conversation_participants')
+                ->where(['conversation_id' => $c->id, 'user_id' => $request->user()->id])
+                ->where(fn ($q) => $q->whereNull('last_delivered_message_id')->orWhere('last_delivered_message_id', '<', $upTo))
+                ->update(['last_delivered_message_id' => $upTo]);
         }
 
         return response()->json(null, 204);
@@ -470,6 +550,7 @@ class ConversationController extends Controller
                 DB::table('messages')->where('id', $m->id)->update(['recalled_at' => now()]);
                 MessageAttachment::where('message_id', $m->id)->delete();
                 DB::table('message_reactions')->where('message_id', $m->id)->delete();
+                DB::table('conversations')->where('id', $m->conversation_id)->where('pinned_message_id', $m->id)->update(['pinned_message_id' => null]);
             });
             $paths->each(fn (string $path) => ImageStore::deleteLater($path));
         }
@@ -501,19 +582,24 @@ class ConversationController extends Controller
         $lastMessages = collect($this->presentMessages(Message::whereIn('id', $conversations->pluck('last_message_id')->filter())->get(), $me))->keyBy('id');
         $presence = Presence::forUsers($me, $others->values());
 
+        $partners = DB::table('conversation_participants')->whereIn('conversation_id', $ids)->where('user_id', '!=', $me->id)->get()->keyBy('conversation_id');
+
         $unread = DB::table('messages as m')
             ->join('conversation_participants as cp', fn ($j) => $j->on('cp.conversation_id', '=', 'm.conversation_id')->where('cp.user_id', $me->id))
             ->whereIn('m.conversation_id', $ids)->where('m.sender_id', '!=', $me->id)
             ->where(fn ($q) => $q->whereNull('cp.last_read_message_id')->orWhereColumn('m.id', '>', 'cp.last_read_message_id'))
             ->groupBy('m.conversation_id')->selectRaw('m.conversation_id, count(*) as n')->pluck('n', 'conversation_id');
 
-        return $conversations->map(function (Conversation $c) use ($others, $lastMessages, $unread, $presence) {
+        return $conversations->map(function (Conversation $c) use ($others, $lastMessages, $unread, $presence, $partners, $me) {
             $last = $c->last_message_id ? $lastMessages->get($c->last_message_id) : null;
 
             return [
                 'id' => $c->id,
                 'participant' => PostPresenter::userSummary($others[$c->id]) + $presence[$others[$c->id]->id],
                 'lastMessage' => $last,
+                'partnerLastDeliveredMessageId' => $partners[$c->id]->last_delivered_message_id ?? null,
+                'partnerLastReadMessageId' => $partners[$c->id]->last_read_message_id ?? null,
+                'pinnedMessage' => $this->pinnedFor($c, $me),
                 'unreadCount' => (int) ($unread[$c->id] ?? 0),
                 'updatedAt' => PostPresenter::timestamp(Carbon::parse($c->last_message_at ?? $c->created_at, 'UTC')),
             ];

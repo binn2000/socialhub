@@ -1498,6 +1498,7 @@ class _MainScreenState extends State<MainScreen> {
           onReactToMessage: widget.api.isRemote ? _reactToMessage : null,
           onRecallMessage: widget.api.isRemote ? _recallMessage : null,
           onHideMessage: widget.api.isRemote ? _hideMessage : null,
+          onPinMessage: widget.api.isRemote ? _pinMessage : null,
           conversations: _conversations,
           notes: widget.api.isRemote ? _notes : null,
           onSetNote: widget.api.isRemote ? _handleSetNote : null,
@@ -1553,6 +1554,9 @@ class _MainScreenState extends State<MainScreen> {
                   : conversation.unreadCount,
               messages:
                   _findConversation(conversation.id)?.messages ?? const [],
+              partnerDeliveredId: conversation.partnerDeliveredId,
+              partnerReadId: conversation.partnerReadId,
+              pinnedMessage: conversation.pinnedMessage,
             ),
         ];
         _conversations
@@ -1625,6 +1629,18 @@ class _MainScreenState extends State<MainScreen> {
       final incoming = poll.messages;
 
       _applyMessageStates(id, poll.states);
+      if (poll.hasChatMeta) {
+        _updateConversation(
+          id,
+          (current) => _copyConversation(
+            current,
+            partnerDeliveredId: poll.partnerDeliveredId,
+            partnerReadId: poll.partnerReadId,
+            pinnedMessage: poll.pinnedMessage,
+            clearPinnedMessage: poll.pinnedMessage == null,
+          ),
+        );
+      }
 
       final known = _findConversation(id)!.messages.map((m) => m.id).toSet();
       final fresh = incoming.where((m) => !known.contains(m.id)).toList();
@@ -1799,6 +1815,12 @@ class _MainScreenState extends State<MainScreen> {
               onHideMessage: widget.api.isRemote
                   ? (messageId) => _hideMessage(conversation.id, messageId)
                   : null,
+              onPinMessage: widget.api.isRemote
+                  ? (messageId) => _pinMessage(conversation.id, messageId)
+                  : null,
+              onUnpinMessage: widget.api.isRemote
+                  ? () => _pinMessage(conversation.id, null)
+                  : null,
               onSendMessageTo: widget.api.isRemote
                   ? (conversationId, text) =>
                         _handleSendMessage(conversationId, text)
@@ -1908,6 +1930,34 @@ class _MainScreenState extends State<MainScreen> {
           context,
         ).showSnackBar(SnackBar(content: Text(error.displayMessage)));
       }
+    }
+  }
+
+  /// Pins a message for both people (or removes the pin when [messageId] is null).
+  Future<void> _pinMessage(String conversationId, String? messageId) async {
+    try {
+      final pinned = messageId == null
+          ? null
+          : await _guard(
+              () => widget.api.pinMessage(conversationId, messageId),
+            );
+      if (messageId == null) {
+        await _guard(() => widget.api.unpinMessage(conversationId));
+      }
+      if (!mounted) return;
+      _updateConversation(
+        conversationId,
+        (current) => _copyConversation(
+          current,
+          pinnedMessage: pinned,
+          clearPinnedMessage: pinned == null,
+        ),
+      );
+    } on ApiException catch (error) {
+      if (!mounted || error.isUnauthenticated) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.displayMessage)));
     }
   }
 
@@ -2069,6 +2119,10 @@ class _MainScreenState extends State<MainScreen> {
     String? lastMessage,
     String? time,
     int? unreadCount,
+    String? partnerDeliveredId,
+    String? partnerReadId,
+    ChatMessage? pinnedMessage,
+    bool clearPinnedMessage = false,
   }) {
     return Conversation(
       id: conversation.id,
@@ -2077,6 +2131,11 @@ class _MainScreenState extends State<MainScreen> {
       time: time ?? conversation.time,
       unreadCount: unreadCount ?? conversation.unreadCount,
       messages: messages ?? conversation.messages,
+      partnerDeliveredId: partnerDeliveredId ?? conversation.partnerDeliveredId,
+      partnerReadId: partnerReadId ?? conversation.partnerReadId,
+      pinnedMessage: clearPinnedMessage
+          ? null
+          : (pinnedMessage ?? conversation.pinnedMessage),
     );
   }
 

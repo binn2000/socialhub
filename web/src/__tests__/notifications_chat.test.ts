@@ -81,6 +81,9 @@ describe("Phase 5: Notifications & Chat (Messenger)", () => {
           attachments: [],
           createdAt: "2026-11-03T11:05:00Z",
         },
+        partnerLastDeliveredMessageId: null,
+        partnerLastReadMessageId: null,
+        pinnedMessage: null,
         unreadCount: 2,
         updatedAt: "2026-11-03T11:05:00Z",
       };

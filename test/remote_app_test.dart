@@ -540,7 +540,28 @@ class _FakeRemoteApi extends SocialApi {
       messages: List.of(newMessages[conversationId] ?? const []),
       otherTyping: partnerTyping,
       states: pollStates,
+      hasChatMeta: pollChatMeta != null,
+      partnerDeliveredId: pollChatMeta?.delivered,
+      partnerReadId: pollChatMeta?.read,
+      pinnedMessage: pollChatMeta?.pinned,
     );
+  }
+
+  /// What the next poll says about the other person's markers and the pin.
+  ({String? delivered, String? read, ChatMessage? pinned})? pollChatMeta;
+
+  @override
+  Future<ChatMessage?> pinMessage(
+    String conversationId,
+    String messageId,
+  ) async {
+    messageActions.add('pin:$messageId');
+    return _known(conversationId, messageId);
+  }
+
+  @override
+  Future<void> unpinMessage(String conversationId) async {
+    messageActions.add('unpin');
   }
 
   /// What the next poll says changed on known messages.
@@ -2613,6 +2634,69 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(api.sentMessages, contains('c2|tin cũ'));
+    });
+
+    testWidgets('ticks follow what the other person fetched and read', (
+      tester,
+    ) async {
+      final api = _FakeRemoteApi(sessionUser: _me);
+      api.conversations = [
+        Conversation(
+          id: 'c1',
+          user: _lan,
+          lastMessage: 'tin hai',
+          time: '1 giờ trước',
+          unreadCount: 0,
+          messages: const [],
+          partnerDeliveredId: 'm2',
+          partnerReadId: 'm1',
+        ),
+      ];
+      api.chatHistory['c1'] = [
+        msg('m1', 'tin một', from: _me),
+        msg('m2', 'tin hai', from: _me),
+        msg('m3', 'tin ba', from: _me),
+      ];
+      await _pump(tester, api);
+      await openChat(tester);
+
+      // m1 seen (with the other person's avatar), m2 delivered, m3 only sent.
+      expect(find.text('Đã xem'), findsOneWidget);
+      expect(find.byIcon(Icons.done_all_rounded), findsNWidgets(2));
+      expect(find.byIcon(Icons.done_rounded), findsOneWidget);
+
+      api.pollChatMeta = (delivered: 'm3', read: 'm3', pinned: null);
+      await tester.pump(const Duration(seconds: 4));
+      await tester.pump();
+
+      expect(find.byIcon(Icons.done_all_rounded), findsNWidgets(3));
+      expect(find.byIcon(Icons.done_rounded), findsNothing);
+      expect(
+        find.text('Đã xem'),
+        findsOneWidget,
+      ); // only under the last one seen
+    });
+
+    testWidgets('a pinned message is kept by the server and shared', (
+      tester,
+    ) async {
+      final api = chatApi();
+      await _pump(tester, api);
+      await openChat(tester);
+      expect(find.byTooltip('Bỏ ghim'), findsNothing);
+
+      await tester.longPress(find.text('tin cũ'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Ghim tin nhắn'));
+      await tester.pumpAndSettle();
+      expect(api.messageActions, ['pin:m1']);
+      expect(find.byTooltip('Bỏ ghim'), findsOneWidget);
+
+      // The other person unpins it: the next poll says there is no pin.
+      api.pollChatMeta = (delivered: null, read: null, pinned: null);
+      await tester.pump(const Duration(seconds: 4));
+      await tester.pump();
+      expect(find.byTooltip('Bỏ ghim'), findsNothing);
     });
 
     testWidgets('a conversation being read does not get an unread badge', (

@@ -25,6 +25,7 @@ import {
   Search,
   ChevronUp,
   ChevronDown,
+  Info,
 } from "lucide-react";
 import { UserAvatar } from "@/components/ui/UserAvatar";
 import { timeAgo } from "@/lib/time-ago";
@@ -44,7 +45,20 @@ import { oldestFirst } from "@/lib/messages";
 import { EmojiStickerPicker } from "./EmojiStickerPicker";
 import type { Conversation, Message, Attachment } from "@/types";
 import { applyStates, withMyReaction, type MessageState } from "@/lib/message-state";
+import { lastSeenOfMine, sendState } from "@/lib/message-status";
+import { findMatchingMessageIds } from "@/lib/chat-search";
 import { ForwardMessageModal } from "./ForwardMessageModal";
+import { SharedMediaDrawer } from "./SharedMediaDrawer";
+import { getChatTheme } from "@/lib/chat-theme";
+
+/** The extra things a messages answer carries (`meta`). */
+interface ChatMeta {
+  otherTyping?: boolean;
+  states?: Record<string, MessageState>;
+  partnerLastDeliveredMessageId?: string | null;
+  partnerLastReadMessageId?: string | null;
+  pinnedMessage?: Message | null;
+}
 
 interface ChatPaneProps {
   conversationId: string;
@@ -93,12 +107,19 @@ export function ChatPane({
   const [searchQuery, setSearchQuery] = useState("");
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
 
-  // Pinned message state
-  const [pinnedMessageId, setPinnedMessageId] = useState<string | null>(null);
+  // Pinned message (shared by both people) and how far the other person has fetched and read.
+  const [pinnedMessage, setPinnedMessage] = useState<Message | null>(null);
+  const pinnedMessageId = pinnedMessage?.id ?? null;
+  const [partnerDeliveredId, setPartnerDeliveredId] = useState<string | null>(null);
+  const [partnerReadId, setPartnerReadId] = useState<string | null>(null);
 
   // Lightbox
   const [viewerImages, setViewerImages] = useState<string[]>([]);
   const [viewerIndex, setViewerIndex] = useState(0);
+
+  // Chat theme & Shared Media Drawer state
+  const [chatThemeId, setChatThemeId] = useState<string>("blue");
+  const [showMediaDrawer, setShowMediaDrawer] = useState(false);
 
   // Close context menu when clicking outside
   useEffect(() => {
@@ -107,34 +128,47 @@ export function ChatPane({
     return () => window.removeEventListener("click", handleCloseMenu);
   }, []);
 
-  // The pinned message is remembered by this browser only (reactions, recalls and deletions are on the server).
+  const handleTogglePin = useCallback(
+    async (msgId: string) => {
+      const unpin = pinnedMessage?.id === msgId;
+      try {
+        const res = await clientFetch<{ data: { pinnedMessage: Message | null } }>(
+          `/api/proxy/conversations/${conversationId}/pin`,
+          unpin
+            ? { method: "DELETE" }
+            : { method: "PUT", body: JSON.stringify({ messageId: msgId }) }
+        );
+        setPinnedMessage(res.data.pinnedMessage);
+        toast.info(unpin ? "Đã bỏ ghim tin nhắn" : "Đã ghim tin nhắn cho cả hai người");
+      } catch {
+        toast.error("Không thể ghim tin nhắn lúc này");
+      }
+    },
+    [conversationId, pinnedMessage?.id, toast]
+  );
+
   useEffect(() => {
     if (!conversationId) return;
     try {
-      const storedPin = localStorage.getItem(`chat_pin_${conversationId}`);
-      if (storedPin) {
-        setPinnedMessageId(storedPin);
+      const storedTheme = localStorage.getItem(`chat_theme_${conversationId}`);
+      if (storedTheme) {
+        setChatThemeId(storedTheme);
+      } else {
+        setChatThemeId("blue");
       }
     } catch {
-      // Ignore localStorage errors
+      // Ignore
     }
   }, [conversationId]);
 
-  const handleTogglePin = useCallback((msgId: string) => {
-    setPinnedMessageId((prev) => {
-      const next = prev === msgId ? null : msgId;
-      try {
-        if (next) {
-          localStorage.setItem(`chat_pin_${conversationId}`, next);
-        } else {
-          localStorage.removeItem(`chat_pin_${conversationId}`);
-        }
-      } catch {
-        // Ignore
-      }
-      toast.info(next ? "Đã ghim tin nhắn lên đầu cuộc trò chuyện" : "Đã bỏ ghim tin nhắn");
-      return next;
-    });
+  const handleSelectTheme = useCallback((themeId: string) => {
+    setChatThemeId(themeId);
+    try {
+      localStorage.setItem(`chat_theme_${conversationId}`, themeId);
+    } catch {
+      // Ignore
+    }
+    toast.success(`Đã đổi chủ đề sang ${getChatTheme(themeId).name}`);
   }, [conversationId, toast]);
 
   const replaceMessage = useCallback((updated: Message) => {
@@ -261,6 +295,14 @@ export function ChatPane({
   }, []);
 
   // 1. Initial Load of Messages & Conversation
+  /** What the server says besides the messages: the other person's markers and the pin. */
+  const applyChatMeta = useCallback((meta?: ChatMeta) => {
+    if (!meta) return;
+    if (meta.partnerLastDeliveredMessageId !== undefined) setPartnerDeliveredId(meta.partnerLastDeliveredMessageId);
+    if (meta.partnerLastReadMessageId !== undefined) setPartnerReadId(meta.partnerLastReadMessageId);
+    if (meta.pinnedMessage !== undefined) setPinnedMessage(meta.pinnedMessage);
+  }, []);
+
   const loadInitialData = useCallback(async () => {
     setLoading(true);
     try {
@@ -274,8 +316,9 @@ export function ChatPane({
       // Load initial messages
       const msgRes = await clientFetch<{
         data: Message[];
-        meta?: { otherTyping?: boolean };
+        meta?: ChatMeta;
       }>(`/api/proxy/conversations/${conversationId}/messages?limit=100`);
+      applyChatMeta(msgRes.meta);
 
       // The newest message must end up at the bottom, so it is still there after a reload.
       setMessages(oldestFirst(msgRes.data));
@@ -292,7 +335,7 @@ export function ChatPane({
       setLoading(false);
       setTimeout(() => scrollToBottom(false), 100);
     }
-  }, [conversationId, scrollToBottom]);
+  }, [conversationId, scrollToBottom, applyChatMeta]);
 
   useEffect(() => {
     loadInitialData();
@@ -312,10 +355,11 @@ export function ChatPane({
 
         const res = await clientFetch<{
           data: Message[];
-          meta?: { otherTyping?: boolean; states?: Record<string, MessageState> };
+          meta?: ChatMeta;
         }>(`/api/proxy/conversations/${conversationId}/messages${query}`);
 
         setIsPartnerTyping(Boolean(res.meta?.otherTyping));
+        applyChatMeta(res.meta);
         // Reactions and recalls on messages we already have.
         setMessages((prev) => applyStates(prev, res.meta?.states));
 
@@ -345,7 +389,7 @@ export function ChatPane({
     }, 4000);
 
     return () => clearInterval(pollInterval);
-  }, [conversationId, messages, currentUser?.id, sending, scrollToBottom]);
+  }, [conversationId, messages, currentUser?.id, sending, scrollToBottom, applyChatMeta]);
 
   // 3. Send Typing Signals
   const handleTypingSignal = (isTyping: boolean) => {
@@ -499,16 +543,10 @@ export function ChatPane({
   const visibleMessages = messages;
 
   // Search filter and matching IDs
-  const matchingMessageIds = React.useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return [];
-    return visibleMessages
-      .filter((m) => {
-        const parsed = parseReplyMessage(m.text);
-        return (parsed.text || m.text || "").toLowerCase().includes(q);
-      })
-      .map((m) => m.id);
-  }, [searchQuery, visibleMessages]);
+  const matchingMessageIds = React.useMemo(
+    () => findMatchingMessageIds(visibleMessages, searchQuery),
+    [searchQuery, visibleMessages]
+  );
 
   const handlePrevMatch = () => {
     if (matchingMessageIds.length === 0) return;
@@ -525,20 +563,44 @@ export function ChatPane({
     scrollToMessage(matchingMessageIds[nextIdx]);
   };
 
-  const pinnedMessage = visibleMessages.find((m) => m.id === pinnedMessageId);
+  const lastSeenId = lastSeenOfMine(visibleMessages, currentUser?.id, partnerReadId);
 
-  // Find last message sent by currentUser
-  const lastMyMessage = React.useMemo(() => {
-    for (let i = visibleMessages.length - 1; i >= 0; i--) {
-      if (
-        visibleMessages[i].senderId === currentUser?.id &&
-        !visibleMessages[i].isRecalled
-      ) {
-        return visibleMessages[i];
-      }
-    }
-    return null;
-  }, [visibleMessages, currentUser?.id]);
+  const activeTheme = getChatTheme(chatThemeId);
+
+  /** Ticks under one of my messages; the other person's small avatar marks the last one they have seen. */
+  const renderSendStatus = (msg: Message) => {
+    const state = sendState(msg.id, partnerDeliveredId, partnerReadId);
+    return (
+      <span className="flex items-center gap-1 ml-1">
+        {state === "sent" && (
+          <span title="Đã gửi" className="flex items-center">
+            <Check className="w-3.5 h-3.5 text-appText-secondary/70" />
+          </span>
+        )}
+        {state === "delivered" && (
+          <span title="Đã nhận" className="flex items-center">
+            <CheckCheck className="w-3.5 h-3.5 text-appText-secondary/70" />
+          </span>
+        )}
+        {state === "seen" && (
+          <span title="Đã xem" className="flex items-center">
+            <CheckCheck className="w-3.5 h-3.5 text-brand" />
+          </span>
+        )}
+        {msg.id === lastSeenId && (
+          <span className="flex items-center gap-1" title="Đã xem">
+            <UserAvatar
+              name={participant?.name}
+              imageUrl={participant?.avatarUrl}
+              size="xs"
+              className="w-3.5 h-3.5 text-[8px]"
+            />
+            <span className="text-[9px] text-brand font-medium">Đã xem</span>
+          </span>
+        )}
+      </span>
+    );
+  };
 
   return (
     <div
@@ -566,9 +628,10 @@ export function ChatPane({
           )}
 
           {participant ? (
-            <Link
-              href={`/profile/${participant.id}`}
-              className="flex items-center gap-3 min-w-0 hover:opacity-85 transition"
+            <div
+              onClick={() => setShowMediaDrawer(true)}
+              className="flex items-center gap-3 min-w-0 hover:opacity-85 transition cursor-pointer"
+              title="Xem thông tin hội thoại & tệp chia sẻ"
             >
               <UserAvatar
                 name={participant.name}
@@ -584,7 +647,7 @@ export function ChatPane({
                   {lastSeenText}
                 </p>
               </div>
-            </Link>
+            </div>
           ) : (
             <div className="w-32 h-6 bg-surface-muted dark:bg-surface-dark-muted rounded animate-pulse" />
           )}
@@ -606,6 +669,18 @@ export function ChatPane({
             title="Tìm kiếm nội dung tin nhắn"
           >
             <Search className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowMediaDrawer(!showMediaDrawer)}
+            className={`p-2 rounded-xl transition cursor-pointer ${
+              showMediaDrawer
+                ? "text-brand bg-brand/10 dark:bg-brand/20"
+                : "text-appText-secondary hover:text-appText-primary dark:hover:text-white hover:bg-surface-muted dark:hover:bg-surface-dark-muted"
+            }`}
+            title="Thông tin hội thoại, chủ đề & tệp chia sẻ"
+          >
+            <Info className="w-4 h-4" />
           </button>
         </div>
       </div>
@@ -742,29 +817,7 @@ export function ChatPane({
                   </div>
                   <div className="flex items-center gap-1 text-[10px] text-appText-secondary mt-0.5 px-2">
                     <span>{timeAgo(msg.createdAt)}</span>
-                    {isMine && (
-                      msg.id === lastMyMessage?.id ? (
-                        isOnline ? (
-                          <span className="flex items-center gap-1 ml-1" title="Đã xem">
-                            <UserAvatar
-                              name={participant?.name}
-                              imageUrl={participant?.avatarUrl}
-                              size="xs"
-                              className="w-3.5 h-3.5 text-[8px]"
-                            />
-                            <span className="text-[9px] text-brand font-medium">Đã xem</span>
-                          </span>
-                        ) : (
-                          <span className="flex items-center gap-0.5 ml-0.5" title="Đã nhận">
-                            <CheckCheck className="w-3.5 h-3.5 text-brand" />
-                          </span>
-                        )
-                      ) : (
-                        <span className="flex items-center gap-0.5 ml-0.5" title="Đã gửi">
-                          <CheckCheck className="w-3.5 h-3.5 text-appText-secondary/70" />
-                        </span>
-                      )
-                    )}
+                    {isMine && renderSendStatus(msg)}
                   </div>
                 </div>
               );
@@ -892,29 +945,7 @@ export function ChatPane({
                   </div>
                   <div className="flex items-center gap-1 text-[10px] text-appText-secondary mt-0.5 px-2">
                     <span>{timeAgo(msg.createdAt)}</span>
-                    {isMine && (
-                      msg.id === lastMyMessage?.id ? (
-                        isOnline ? (
-                          <span className="flex items-center gap-1 ml-1" title="Đã xem">
-                            <UserAvatar
-                              name={participant?.name}
-                              imageUrl={participant?.avatarUrl}
-                              size="xs"
-                              className="w-3.5 h-3.5 text-[8px]"
-                            />
-                            <span className="text-[9px] text-brand font-medium">Đã xem</span>
-                          </span>
-                        ) : (
-                          <span className="flex items-center gap-0.5 ml-0.5" title="Đã nhận">
-                            <CheckCheck className="w-3.5 h-3.5 text-brand" />
-                          </span>
-                        )
-                      ) : (
-                        <span className="flex items-center gap-0.5 ml-0.5" title="Đã gửi">
-                          <CheckCheck className="w-3.5 h-3.5 text-appText-secondary/70" />
-                        </span>
-                      )
-                    )}
+                    {isMine && renderSendStatus(msg)}
                   </div>
                 </div>
               );
@@ -983,9 +1014,10 @@ export function ChatPane({
                 <div
                   className={`relative max-w-[85%] sm:max-w-[70%] rounded-2xl p-3 shadow-xs space-y-2 ${
                     isMine
-                      ? "bg-brand text-white rounded-br-xs"
+                      ? activeTheme.bubbleClass
                       : "bg-white dark:bg-surface-dark-muted text-appText-primary dark:text-appText-dark-primary border border-appBorder-light/80 dark:border-appBorder-dark/80 rounded-bl-xs"
                   }`}
+                  style={isMine ? activeTheme.bubbleStyle : undefined}
                 >
                   {/* Quoted Message Preview Box */}
                   {parsedReply && (
@@ -1096,29 +1128,7 @@ export function ChatPane({
 
                 <div className="flex items-center gap-1 text-[10px] text-appText-secondary mt-1 px-1">
                   <span>{timeAgo(msg.createdAt)}</span>
-                  {isMine && (
-                    msg.id === lastMyMessage?.id ? (
-                      isOnline ? (
-                        <span className="flex items-center gap-1 ml-1" title="Đã xem">
-                          <UserAvatar
-                            name={participant?.name}
-                            imageUrl={participant?.avatarUrl}
-                            size="xs"
-                            className="w-3.5 h-3.5 text-[8px]"
-                          />
-                          <span className="text-[9px] text-brand font-medium">Đã xem</span>
-                        </span>
-                      ) : (
-                        <span className="flex items-center gap-0.5 ml-0.5" title="Đã nhận">
-                          <CheckCheck className="w-3.5 h-3.5 text-brand" />
-                        </span>
-                      )
-                    ) : (
-                      <span className="flex items-center gap-0.5 ml-0.5" title="Đã gửi">
-                        <CheckCheck className="w-3.5 h-3.5 text-appText-secondary/70" />
-                      </span>
-                    )
-                  )}
+                  {isMine && renderSendStatus(msg)}
                 </div>
               </div>
             );
@@ -1247,7 +1257,7 @@ export function ChatPane({
         <button
           type="submit"
           disabled={(!inputText.trim() && pendingFiles.length === 0) || sending}
-          className="p-2.5 rounded-full bg-brand hover:bg-brand-hover text-white disabled:opacity-40 disabled:cursor-not-allowed transition flex-shrink-0"
+          className={`p-2.5 rounded-full ${activeTheme.sendBtnClass} disabled:opacity-40 disabled:cursor-not-allowed transition flex-shrink-0`}
           title="Gửi"
         >
           {sending ? (
@@ -1368,6 +1378,23 @@ export function ChatPane({
           onClose={() => setForwarding(null)}
         />
       )}
+      <SharedMediaDrawer
+        isOpen={showMediaDrawer}
+        onClose={() => setShowMediaDrawer(false)}
+        participant={participant}
+        messages={visibleMessages}
+        currentThemeId={chatThemeId}
+        onSelectTheme={handleSelectTheme}
+        onSelectImage={(url) => {
+          setViewerImages([url]);
+          setViewerIndex(0);
+        }}
+        pinnedMessage={pinnedMessage ?? undefined}
+        onJumpToMessage={(msgId) => {
+          setShowMediaDrawer(false);
+          scrollToMessage(msgId);
+        }}
+      />
     </div>
   );
 }

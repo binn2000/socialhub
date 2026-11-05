@@ -93,6 +93,13 @@ class Conversation {
   final int unreadCount;
   final List<ChatMessage> messages;
 
+  /// Server only: how far the other person's app has fetched and read (ids of
+  /// the newest message), for the ticks and "Đã xem", and the message pinned
+  /// for both people.
+  final String? partnerDeliveredId;
+  final String? partnerReadId;
+  final ChatMessage? pinnedMessage;
+
   const Conversation({
     required this.id,
     required this.user,
@@ -100,5 +107,8 @@ class Conversation {
     required this.time,
     required this.unreadCount,
     required this.messages,
+    this.partnerDeliveredId,
+    this.partnerReadId,
+    this.pinnedMessage,
   });
 }

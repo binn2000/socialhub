@@ -62,10 +62,21 @@ class MessagePoll {
   /// Reactions and recalls on messages that were already known.
   final Map<String, MessageState> states;
 
+  /// The other person's delivered and read markers and the pinned message, when
+  /// the server said them ([hasChatMeta]; the pin can be null on purpose).
+  final bool hasChatMeta;
+  final String? partnerDeliveredId;
+  final String? partnerReadId;
+  final ChatMessage? pinnedMessage;
+
   const MessagePoll({
     this.messages = const [],
     this.otherTyping = false,
     this.states = const {},
+    this.hasChatMeta = false,
+    this.partnerDeliveredId,
+    this.partnerReadId,
+    this.pinnedMessage,
   });
 }
 
@@ -329,6 +340,14 @@ abstract class SocialApi {
     String messageId,
     String? emoji,
   ) async => null;
+
+  /// Pins a message for both people (null from the mock app) or removes the pin.
+  Future<ChatMessage?> pinMessage(
+    String conversationId,
+    String messageId,
+  ) async => null;
+
+  Future<void> unpinMessage(String conversationId) async {}
 
   /// "Thu hồi": takes my message back for both people.
   Future<ChatMessage?> recallMessage(

@@ -46,6 +46,10 @@ class MessagesScreen extends StatefulWidget {
   final Future<void> Function(String conversationId, String messageId)?
   onHideMessage;
 
+  /// Pins a message (null removes the pin), server only.
+  final Future<void> Function(String conversationId, String? messageId)?
+  onPinMessage;
+
   /// Searches conversations on the server by the other person's name or
   /// username, which also finds old ones that were not loaded. The results
   /// are added to [conversations]. Null on the mock app.
@@ -87,6 +91,7 @@ class MessagesScreen extends StatefulWidget {
     this.onReactToMessage,
     this.onRecallMessage,
     this.onHideMessage,
+    this.onPinMessage,
     this.onSearchConversations,
     this.notes,
     this.onSetNote,
@@ -483,6 +488,13 @@ class _MessagesScreenState extends State<MessagesScreen> {
                                     activeId,
                                     messageId,
                                   ),
+                            onPinMessage: widget.onPinMessage == null
+                                ? null
+                                : (messageId) =>
+                                      widget.onPinMessage!(activeId, messageId),
+                            onUnpinMessage: widget.onPinMessage == null
+                                ? null
+                                : () => widget.onPinMessage!(activeId, null),
                             onSendMessageTo: widget.onSendMessage == null
                                 ? null
                                 : (conversationId, text) =>
